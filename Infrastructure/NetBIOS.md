@@ -1,24 +1,61 @@
-# Netowrk Basic Input Output System
+# NetBIOS
+
+## Why It Matters
+
+NetBIOS is mainly useful for host identification and naming intelligence. It can reveal:
+
+- workstation or server names
+- domain or workgroup names
+- whether file sharing is active
+
+It is often an early clue that feeds into SMB and RPC testing.
+
+## Workflow
+
+1. detect NetBIOS name service
+2. enumerate names and flags
+3. map results into SMB and Windows-host targeting
 
 ## Enumeration
 
-```
+```bash
 nmblookup -A 10.10.10.10
 nbtscan 10.10.10.10
-sudo nmap -sU -sV -T4 --script nbstat.nse -p137 -Pn -n 10.10.10.10
-```
-
-### nbtscan
-
-* The below command will list NetBIOS names and corresponding IP addresses for network mapping and asset identification
-```
 nbtscan 192.168.1.0/24
+sudo nmap -sU -sV -T4 --script nbstat -p 137 -Pn -n 10.10.10.10
 ```
 
-## Interpreting NetBIOS Enumeration Results
-```
-Flag	Meaning
-<00>	Indicates the hostname or domain name
-<20>	Indicates the system is running file-sharing services
-<03>	Indicates the Messenger service is active on the machine
+## Interpreting Results
+
+Common flags:
+
+- `<00>` hostname or domain/workgroup name
+- `<20>` file-sharing service present
+- `<03>` legacy messenger service entry
+
+The most useful output is usually:
+
+- hostname
+- domain or workgroup
+- confirmation that SMB-related services are likely worth following up
+
+## Pitfalls
+
+- treating NetBIOS itself as the objective
+- not pivoting immediately into SMB and RPC checks
+
+## Reporting Notes
+
+Capture:
+
+- disclosed hostnames
+- domain or workgroup data
+- evidence of file-sharing capability
+
+## Fast Checklist
+
+```text
+1. Query NetBIOS names
+2. Note hostname and domain/workgroup
+3. Use the result to drive SMB/RPC follow-up
 ```

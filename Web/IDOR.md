@@ -1,179 +1,153 @@
 # Insecure Direct Object Reference (IDOR)
 
-## Detection
+## Why It Matters
 
-### Identify IDOR candidates
+IDOR is one of the most direct ways to prove broken authorization. The application exposes an object reference, and the server does not properly verify that the requester should access it.
 
-### Search for parameters that reference objects:
-```
-?user_id=
-?invoice=
-?file=
-?id=
-```
+Typical impacts:
+
+- reading another user's data
+- modifying another user's objects
+- downloading other users' files
+- deleting or approving records you do not own
+
+## Recognition Cues
 
 Look for:
-- Sequential IDs
-- Predictable identifiers
-- GUIDs that map to records
 
-## Manual Testing
-### HTTP GET tampering
+- `id=`
+- `user_id=`
+- `invoice=`
+- `file=`
+- object IDs in JSON bodies
+- path parameters such as `/orders/123`
 
-1. Capture request with ID parameter (authenticated)
-2. Change the object reference in the URL or API request
-3. Send modified request
-4. Check whether unauthorized data is returned
+High-signal signs:
 
-#### Example:
-```
+- sequential IDs
+- predictable UUID disclosure
+- identifiers returned by list APIs and reused in direct fetch APIs
+
+## Workflow
+
+1. find an object reference
+2. capture a legitimate request
+3. modify the identifier
+4. compare the response as the same user and another user
+5. determine whether the impact is read, write, delete, or admin action
+
+## Step 1: Identify Candidates
+
+Examples:
+
+```text
 GET /profile?user_id=123
-```
-Try:
-```
-GET /profile?user_id=124
-GET /profile?user_id=125
-```
-
-
-## Tools / Workflow
-
-### Burp Suite (Intruder – Sniper)
-
-1. Identify relevant parameter
-2. Send to Intruder
-3. Set payload position for object ID
-4. Payloads:
-   - Sequential numbers
-   - Known valid IDs
-   - Wordlist of IDs
-5. Analyze responses (status codes, content length)
-6. Look for successful unauthorized access samples
-
-### Example Payload Setup (Burp)
-```
-Positions: id=§123§
-Payload set:
-   Numbers (start: 1, end: 10000, step: 1)
-```
-
-Filter responses:
-- 200 OK with valid data = possible IDOR
-- Differences in response size/content indicate differing access
-
-
-## API Testing (JSON / REST)
-
-Attack vectors:
-```
 GET /api/orders/123
-```
-Try:
-```
-GET /api/orders/124
+POST /updateInvoice {"invoiceId":1234}
 ```
 
-Modify:
-- Path parameters
-- JSON body identifiers
-- Authorization header values
+Good targets:
 
----
+- profiles
+- invoices
+- orders
+- files
+- reports
+- support tickets
 
-## POST / PUT Manipulation
+## Step 2: Manual Tampering
 
-Example:
-```
-POST /updateInvoice
-{
-  "invoiceId": 1234,
-  "fields": {...}
-}
-```
+Change the reference:
 
-Try:
-```
-{
-  "invoiceId": 1235,
-  "fields": {...}
-}
+```text
+123 -> 124
+1001 -> 1002
 ```
 
----
+Then compare:
 
-## Common IDOR Scenarios
+- status code
+- response length
+- returned user-specific fields
 
-- Horizontal access: user → other user’s data
-- Vertical access: user → admin/resource escalation
-- File access: download others' files
-- Function access: access restricted actions via modified IDs
+## Step 3: Multi-User Validation
 
----
+If possible, use two accounts:
 
-## Indicator Patterns
+- user A owns object A
+- user B owns object B
 
-Susceptible when:
-- Business logic relies only on user ID in request
-- No server-side authorization check
-- ID pattern predictable
-- HTTP status 200 for unauthorized IDs
-- Content returned matches another user’s data
+Test:
 
----
+- user A requesting object B
+- user B requesting object A
 
-## Response Validation Tips
+This gives cleaner evidence than random enumeration.
 
-Check:
-- Status codes (200 OK for modified ID)
-- Body content differences
-- JSON fields belong to other users
-- Length of response (longer/shorter than expected)
+## API Patterns
 
----
+IDOR often appears in:
 
-## Bypasses
+- REST path parameters
+- JSON body fields
+- GraphQL object lookups
+- download endpoints
+- bulk export actions
 
-- Sequential OR brute-forced IDs
-- Encoded IDs: Base64 / URL encoding
-  - Decode identifiers
-  - Modify and re-encode
-- Cookies / JWT claims manipulation (object ID in token)
+Do not limit testing to query-string parameters.
 
----
+## Encoded And Indirect References
 
-## Evidence Collection
+If identifiers appear encoded:
 
-Record:
-- Original request & response
-- Modified request with ID change
-- Unauthorized access proof
-- Screenshot of request/response
-- Relevant headers
+- base64 decode
+- URL decode
+- re-encode after modification
 
----
+Opaque references do not fix authorization if the server still fails to enforce ownership.
 
-## Mitigation (Report Wording)
+## Automation
 
-- Always enforce **server-side access control** for object references  
-- Verify that the authenticated user is authorized for the requested object  
-- Avoid exposing internal IDs directly
-- Use **indirect references** (opaque, unpredictable tokens)  
-- Apply **deny-by-default** access checks  
-- Check permissions on each request (not just authentication) :contentReference[oaicite:6]{index=6}
+Use Burp or similar tooling when the space is large, but validate manually first.
 
----
+Typical automation target:
 
-## Quick Copy/Paste Commands / Snippets
+- a single numeric or UUID parameter
+- response differences that indicate success
 
-### Burp Intruder setup
-```
-Send to Intruder → Sniper
-Position: id=§123§
-Payloads: Numbers (start 1, end 5000)
-```
+## Where It Overlaps
 
-### Encode / Decode IDs
-```
-echo -n "123" | base64
-echo "MTIz" | base64 -d
+IDOR is often one instance of a larger access control problem, especially in:
+
+- multi-tenant apps
+- download features
+- business workflows
+- admin actions
+
+## Pitfalls
+
+- treating sequential IDs alone as a vulnerability
+- stopping after a 200 response without confirming the data belongs to another user
+- missing write or delete operations because only `GET` requests were tested
+- ignoring identifiers in JSON, headers, or hidden fields
+
+## Reporting Notes
+
+Capture:
+
+- the vulnerable object reference
+- the legitimate request
+- the unauthorized modified request
+- whose data or object was accessed
+- whether the impact was read, write, delete, or workflow action
+
+## Fast Checklist
+
+```text
+1. Find object references
+2. Capture a valid request
+3. Modify the ID
+4. Compare response and ownership
+5. Test read and write paths
+6. Save the authorized and unauthorized pair
 ```

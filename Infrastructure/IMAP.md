@@ -1,36 +1,37 @@
-# Internet Message Access Protocol (IMAP)
+# IMAP
 
-## Service Detection
+## Why It Matters
 
-### nmap
-```
+IMAP mailbox access can reveal:
+
+- password reset emails
+- sensitive attachments
+- operational communications
+- internal usernames and systems
+
+Compared with POP3, IMAP is often better for structured mailbox exploration because folders and search are richer.
+
+## Workflow
+
+1. detect IMAP or IMAPS
+2. validate credentials
+3. enumerate mailboxes
+4. search for high-value content
+5. translate mail access into account takeover or intelligence
+
+## Detection
+
+```bash
 nmap -p 143,993 -sV target.com
-```
-
-## Banner Grabbing
-
-### netcat
-```
 nc target.com 143
-```
-
-### telnet
-```
 telnet target.com 143
 ```
 
-### nmap
-```
-nmap -p 143 -sV target.com
-```
+## Step 1: Connect
 
-## Connect
+### IMAP
 
-### telnet (IMAP)
-```
-telnet target.com 143
-
-# Basic IMAP conversation
+```text
 a1 LOGIN username password
 a2 LIST "" "*"
 a3 SELECT INBOX
@@ -38,132 +39,70 @@ a4 FETCH 1 BODY[]
 a5 LOGOUT
 ```
 
-### openssl (IMAPS)
-```
-openssl s_client -connect target.com:993 -crlf -quiet
+### IMAPS
 
-# IMAP commands
-a1 LOGIN username password
-a2 LIST "" "*"
-a3 LOGOUT
+```bash
+openssl s_client -connect target.com:993 -crlf -quiet
 ```
 
 ### cURL
-```
-# List mailboxes
+
+```bash
 curl -u username:password imap://target.com/
-
-# Read specific email
 curl -u username:password imap://target.com/INBOX -X "FETCH 1 BODY[]"
-
-# IMAPS
 curl -u username:password imaps://target.com/ --insecure
 ```
 
-## Enumeration 
+## Step 2: Enumerate Mailboxes
 
-### Advanced IMAP Enumeration using nmap scripts
-```
-# Enumerate server capabilities
-nmap -p 143 --script imap-capabilities target.com
+Useful actions:
 
-# Extract NTLM authentication details
-nmap -p 143 --script imap-ntlm-info target.com
+- list folders
+- select `INBOX`
+- search for reset and password content
+- retrieve only the messages that prove impact
 
-# Run all IMAP-related scripts
-nmap -p 143,993 --script imap-* target.com
-```
+## Step 3: Search For Value
 
-### Mailbox Enumeration
-```
-# List all mailboxes
-a1 LOGIN username password
-a2 LIST "" "*"
+Typical high-value searches:
 
-# List folders
-a3 LIST "" "INBOX.*"
+- password reset
+- VPN or MFA setup
+- credentials
+- confidential attachments
+- administrative communications
 
-# Check mailbox status
-a4 STATUS INBOX (MESSAGES RECENT UNSEEN)
+## Step 4: Credential Testing
 
-# Select mailbox
-a5 SELECT INBOX
-```
+If needed and in scope:
 
-## Brute Force
-
-### hydra (see also hydra cheatsheet)
-```
-# IMAP (plaintext)
+```bash
 hydra -l user@target.com -P passwords.txt imap://target.com
-
-# IMAPS (SSL/TLS)
 hydra -l user@target.com -P passwords.txt imaps://target.com:993
-
-# Multiple users
 hydra -L users.txt -P passwords.txt imap://target.com
 ```
 
-### nmap
-```
-nmap -p 143 --script imap-brute target.com
-```
+## Pitfalls
 
-## Pass-The-Hash
+- brute forcing before trying reused credentials
+- downloading entire mailboxes without triage
+- reporting mailbox access without showing why the content matters
+
+## Reporting Notes
+
+Capture:
+
+- the mailbox accessed
+- the credential source
+- the folders or messages reviewed
+- the specific sensitive content obtained
+
+## Fast Checklist
+
+```text
+1. Detect IMAP/IMAPS
+2. Validate credentials
+3. List mailboxes and select INBOX
+4. Search for resets, secrets, and sensitive content
+5. Save only the messages needed to prove impact
 ```
-# If NTLM auth is supported
-# Connect with NTLM hash instead of password
-# Check with:
-nmap -p 143 --script imap-ntlm-info target.com
-```
-
-## Post-Exploitation
-
-### Email Extraction
-
-#### Read and Search Emails
-```
-# Read all emails
-a1 LOGIN username password
-a2 SELECT INBOX
-a3 FETCH 1:* (BODY[])
-
-# Search for specific content
-a4 SEARCH SUBJECT "password"
-a5 SEARCH FROM "admin@target.com"
-a6 SEARCH TEXT "confidential"
-```
-
-#### Download Emails with cURL
-```
-for i in {1..100}; do
-  curl -u username:password "imap://target.com/INBOX;UID=$i" > email_$i.eml
-done
-```
-
-### Sensitive Information
-#### Search for keywords
-```
-SEARCH TEXT "password"
-SEARCH TEXT "credential"
-SEARCH TEXT "confidential"
-SEARCH SUBJECT "reset"
-
-# Search by date
-SEARCH SINCE 01-Jan-2024
-
-# Combined search
-SEARCH FROM "admin" SUBJECT "password"
-```
-
-## Common IMAP commands
-| Command    | Description         | Usage                          |
-|-----------|---------------------|--------------------------------|
-| CAPABILITY| List capabilities   | a1 CAPABILITY                  |
-| LOGIN     | Authenticate        | a1 LOGIN user pass             |
-| LIST      | List mailboxes      | a1 LIST "" "*"                 |
-| SELECT    | Select mailbox      | a1 SELECT INBOX                |
-| FETCH     | Retrieve messages   | a1 FETCH 1 BODY[]              |
-| SEARCH    | Search messages     | a1 SEARCH TEXT "keyword"       |
-| STORE     | Modify flags        | a1 STORE 1 +FLAGS \Deleted     |
-| LOGOUT    | Close session       | a1 LOGOUT                      |

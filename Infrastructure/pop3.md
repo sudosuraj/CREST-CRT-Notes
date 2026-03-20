@@ -1,31 +1,37 @@
-# Post Office Protocol (POP3)
+# POP3
 
-## Service Detection
+## Why It Matters
 
-```
-nmap -p 110,995 target.com
+POP3 is useful when valid mailbox credentials give access to:
+
+- password reset emails
+- internal communications
+- sensitive attachments
+- account takeover paths through mail content
+
+POP3 is less about service exploitation and more about what mail access unlocks.
+
+## Workflow
+
+1. detect POP3 or POP3S
+2. validate credentials
+3. enumerate mailbox size and messages
+4. read high-value mail content
+5. turn emails into credentials, reset paths, or internal intelligence
+
+## Detection
+
+```bash
 nmap -p 110,995 -sV target.com
-```
-
-## Banner Grabbing
-
-### netcat
-```
 nc target.com 110
-```
-
-### telnet
-```
 telnet target.com 110
 ```
 
-## Connect
+## Step 1: Connect
 
-### Telnet (POP3)
-```
-telnet target.com 110
+### POP3
 
-# Basic POP3 conversation
+```text
 USER username
 PASS password
 LIST
@@ -33,103 +39,68 @@ RETR 1
 QUIT
 ```
 
-### openssl (POP3S)
-```
-openssl s_client -connect target.com:995 -crlf -quiet
+### POP3S
 
-# POP3 commands
-USER username
-PASS password
-LIST
-QUIT
+```bash
+openssl s_client -connect target.com:995 -crlf -quiet
 ```
 
 ### cURL
-```
-# List emails
+
+```bash
 curl -u username:password pop3://target.com/
-
-# Read specific email
 curl -u username:password pop3://target.com/1
-
-# POP3S
 curl -u username:password pop3s://target.com/ --insecure
 ```
 
+## Step 2: Credential Testing
 
-## User Enumeration
+If needed and in scope:
 
-**Note:** POP3 doesn't have VRFY/EXPN like SMTP, but you can enumerate via login attempts.
-```
-# Different error messages may reveal valid users
-telnet target.com 110
-USER admin
-# +OK vs -ERR can indicate if user exists
-```
-
-## Brute Force
-
-### hydra (see also hydra cheatsheet)
-```
-# POP3 (plaintext)
+```bash
 hydra -l user@target.com -P passwords.txt pop3://target.com
-
-# POP3S (SSL/TLS)
 hydra -l user@target.com -P passwords.txt pop3s://target.com:995
-
-# Multiple users
 hydra -L users.txt -P passwords.txt pop3://target.com
 ```
 
-### nmap
-```
-nmap -p 110 --script pop3-brute target.com
-```
+## Step 3: Message Triage
 
-## Post-Exploitation
+After access:
 
-### Automated Email Download using cURL
+- check message count
+- pull recent or reset-related emails
+- search downloaded mail for credentials and URLs
+
+## High-Value Mail Content
+
+Look for:
+
+- password reset links
+- welcome emails with temporary passwords
+- VPN or MFA instructions
+- shared secrets or attachments
+
+## Pitfalls
+
+- brute forcing before trying reused mail creds
+- downloading everything without prioritizing high-value messages
+- forgetting that POP3 is usually one mailbox, not full enterprise mail admin access
+
+## Reporting Notes
+
+Capture:
+
+- the mailbox accessed
+- the credential source
+- the sensitive content obtained
+- the downstream impact, such as reset or credential discovery
+
+## Fast Checklist
+
+```text
+1. Detect POP3/POP3S
+2. Validate credentials
+3. List and retrieve messages
+4. Search for reset, credential, and secret content
+5. Save only the mail needed to prove impact
 ```
-for i in {1..100}; do
-  curl -u username:password "pop3://target.com/$i" > email_$i.eml 2>/dev/null
-done
-```
-
-### Manual Email Retrieval 
-```
-# Or using telnet
-telnet target.com 110
-USER username
-PASS password
-STAT  # Get message count
-RETR 1  # Retrieve first email
-RETR 2  # Second email
-```
-
-### Credential Harvesting
-```
-# Search downloaded emails for credentials
-grep -r "password\|credential\|username" *.eml
-
-# Extract URLs
-grep -Eiorh 'https?://[^\s]+' *.eml
-
-# Extract email addresses
-grep -Eiorh '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b' *.eml
-```
-
-## Common POP3 Commands
-
-| Command | Description              | Usage         |
-|--------|--------------------------|---------------|
-| USER   | Username                 | USER username |
-| PASS   | Password                 | PASS password |
-| STAT   | Mailbox stats            | STAT          |
-| LIST   | List messages            | LIST          |
-| RETR   | Retrieve message         | RETR 1        |
-| DELE   | Mark for deletion        | DELE 1        |
-| NOOP   | No operation             | NOOP          |
-| RSET   | Reset                    | RSET          |
-| TOP    | Message header + lines   | TOP 1 10      |
-| UIDL   | Unique IDs               | UIDL          |
-| QUIT   | Close connection         | QUIT          |

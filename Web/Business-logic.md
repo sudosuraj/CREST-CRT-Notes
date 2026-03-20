@@ -1,309 +1,195 @@
 # Business Logic Vulnerabilities
 
-Business Logic flaws occur when an application’s workflow or rules can be manipulated in unintended ways to gain financial, access, or data advantage.
+## Why It Matters
 
-These are NOT technical injection bugs — they exploit flawed assumptions in application design.
+Business logic flaws are not parser bugs. They are workflow failures where the application trusts assumptions that a tester can break. These issues can lead to:
 
-# 1. Quick Testing Checklist 
+- free purchases
+- duplicate redemptions
+- unauthorized refunds
+- negative balances
+- tier or role abuse
+- workflow bypass
 
-1. Understand normal workflow (happy path)
-2. Identify assumptions:
-   - Price
-   - Quantity
-   - Role
-   - Status
-   - Step order
-3. Capture legitimate request
-4. Modify:
-   - Values
-   - Order of requests
-   - Sequence
-   - State
-   - Quantity
-   - Price
-5. Look for:
-   - Free items
-   - Duplicate discounts
-   - Skipped validation
-   - Reused tokens
-   - State manipulation
-   - Negative balances
+The key skill is understanding the intended process first, then testing where the process can be manipulated.
 
-# 2. Common Business Logic Categories
+## Recognition Cues
 
-## A. Price Manipulation
+Look for flows involving:
 
-Look for:
+- carts, pricing, discounts, and checkout
+- loyalty points, wallets, and balances
+- approval and refund workflows
+- subscriptions and plan upgrades
+- one-time actions such as coupon redemption
 
-```
+## Workflow
+
+1. understand the normal happy path
+2. identify the assumptions the workflow relies on
+3. capture the legitimate requests
+4. tamper with values, order, timing, and state
+5. prove business impact, not just parameter acceptance
+
+## Step 1: Map The Happy Path
+
+Before modifying anything, understand:
+
+- the normal step order
+- which data the client sends
+- which values the server recalculates
+- which actions are meant to be one-time or role-limited
+
+## Step 2: Identify Trust Boundaries
+
+High-signal parameters include:
+
+```text
 price=
 amount=
 total=
 cost=
+quantity=
+coupon=
+balance=
+credit=
+status=
+role=
+plan=
 ```
 
-Test:
+The question is whether the server trusts the client too much.
 
-```
+## Common Test Areas
+
+### Price Manipulation
+
+Try:
+
+```text
 price=1
 price=0
 price=-1
 price=0.01
-price=999999
 ```
 
-If client sends price → always try modifying.
+If the server accepts client-supplied pricing, the finding is usually high impact.
 
----
+### Quantity Abuse
 
-## B. Quantity Abuse
+Try:
 
-```
-quantity=1000
+```text
 quantity=0
 quantity=-1
 quantity=999999
 ```
 
-Test:
+Check for:
 
-- Negative quantities
-- Zero quantity
-- Large quantity overflow
+- negative quantity logic
+- integer edge cases
+- free or credit-generating orders
 
----
-
-## C. Discount / Coupon Abuse
+### Discount And Coupon Abuse
 
 Test:
 
-```
-coupon=DISCOUNT50
-coupon=DISCOUNT60
-coupon=DISCOUNT90
-```
+- applying the same coupon twice
+- stacking multiple coupons
+- removing the coupon after the discounted total is set
+- changing the coupon after calculation
 
-Try:
-- Applying same coupon multiple times
-- Removing coupon after discount applied
-- Changing coupon after total calculated
-- Stacking multiple coupons
+### Workflow Bypass
 
-## D. Step Skipping (Workflow Bypass)
+If the flow is:
 
-If flow is:
+1. add item
+2. review
+3. confirm
+4. pay
 
-1. Add item
-2. Review
-3. Confirm
-4. Pay
+Try calling the later endpoints directly:
 
-Try directly calling:
-
-```
+```text
 POST /confirm
 POST /complete
 POST /approve
 ```
 
-Without completing earlier steps.
+### State Manipulation
 
-## E. Parameter Tampering
+Look for:
 
-Look for hidden params:
-
-```
-isPremium=true
-isVerified=true
-isAdmin=true
-approved=true
+```text
 status=approved
+status=completed
+approved=true
+isPremium=true
 role=admin
 ```
 
-Try flipping values.
+If the client can directly control state or privilege markers, that is usually more than just a UI flaw.
 
-## F. Role / Tier Upgrade Abuse
+### Race Conditions
 
-Try modifying:
+Important for:
 
-```
-accountType=premium
-plan=enterprise
-membership=gold
-```
+- coupon use
+- limited inventory
+- balance transfers
+- one-time actions
 
-## G. Multi-Step Token Reuse
+Send multiple requests at once and check whether single-use assumptions break.
 
-If a token is issued in step 1:
+## Numeric Edge Cases
 
-- Reuse token
-- Replay token
-- Use token with modified data
-- Use expired token
+Useful values:
 
-## H. Race Conditions
-
-Used when:
-- Limited inventory
-- Balance transfers
-- Coupon use
-- One-time actions
-
-### Burp Turbo Intruder / Repeater trick:
-
-Send 10–50 identical requests simultaneously.
-
-Goal:
-- Double-spend
-- Bypass single-use restriction
-- Redeem coupon multiple times
-
-## I. Balance Manipulation
-
-Look for:
-
-```
-balance=
-credit=
-wallet=
-points=
-```
-
-Test:
-
-- Negative transfers
-- Self-transfer
-- Large transfer
-- Decimal abuse
-
-
-## J. State Manipulation
-
-Look for:
-
-```
-status=pending
-status=approved
-status=completed
-```
-
-Try:
-
-```
-status=approved
-```
-
-Even if app normally sets it.
-
-
-# 3. Numeric Edge Case Testing
-
-Test edge values:
-
-```
+```text
 0
 -1
 -9999
 999999999
 0.0001
-NaN
 null
 ```
 
-# 4. ID Sequencing Abuse
+You are looking for miscalculations, overflow, underflow, or incorrect validation branches.
 
-If order IDs are sequential:
+## Where It Often Overlaps
 
-```
-orderId=1001 → 1002 → 1003
-```
+Business logic issues often combine with:
 
-Try:
-- Accessing other orders
-- Modifying others' orders
-- Cancelling others' orders
+- IDOR
+- access control flaws
+- race conditions
+- weak server-side validation
 
-(Combines with IDOR)
+## Pitfalls
 
-# 5. Timing-Based Logic Flaws
+- testing values without first understanding the intended workflow
+- reporting parameter tampering without proving real business impact
+- missing multi-step state changes because only one request was altered
+- forgetting to test concurrency on single-use actions
 
-If app enforces:
-- “1 request per day”
-- “1 redemption per account”
+## Reporting Notes
 
-Try:
-- Multiple requests in parallel
-- Rapid submission
-- Using two sessions simultaneously
+Capture:
 
-# 6. Refund / Return Abuse
+- the normal workflow
+- the assumption that was broken
+- the modified request sequence
+- the financial, access, or process impact
+- whether the flaw was repeatable
 
-Test:
+## Fast Checklist
 
-- Refund without payment
-- Refund twice
-- Partial refund → full refund
-- Refund negative value
-
-# 7. Cart Manipulation Flow
-
-1. Add expensive item
-2. Intercept request
-3. Modify:
-
-```
-price=1
-total=1
-```
-
-4. Forward
-
-If server trusts client total → critical flaw.
-
----
-
-# 8. Burp Workflow Strategy
-
-1. Record full purchase flow
-2. Repeater:
-   - Change price
-   - Change quantity
-   - Change coupon
-   - Remove required param
-3. Compare responses
-4. Test multi-send
-5. Observe:
-   - Order confirmation
-   - Payment bypass
-   - Status changes
-
-# 9. Quick Copy-Paste Paylaod List
-
-```
-price=0
-price=1
-price=-1
-price=0.01
-
-quantity=0
-quantity=-1
-quantity=9999
-
-coupon=DISCOUNT50
-coupon=FREE
-coupon=
-
-isAdmin=true
-isPremium=true
-role=admin
-status=approved
-approved=true
-
-balance=999999
-balance=-100
-
-total=1
-amount=1
-cost=0
+```text
+1. Map the happy path
+2. Identify trusted client values
+3. Tamper with price, quantity, state, and sequence
+4. Test replay and concurrency
+5. Prove financial or process impact
+6. Save the exact request chain
 ```

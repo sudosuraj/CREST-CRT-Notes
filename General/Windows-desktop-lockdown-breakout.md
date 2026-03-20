@@ -1,356 +1,233 @@
+# Windows Desktop Lockdown Breakout
 
-# Windows Desktop Lockdown Escape (CRT-Oriented)
+## Step 1: Reach Any Dialog
 
-Goal: Escape a restricted desktop (kiosk, Citrix, GPO lockdown, assigned app) and gain OS-level command execution.
+High-value shortcuts:
 
-# 1. Step 1 – Gain ANY Dialogue Box
-
-Your first objective: get a file dialog or run box.
-
-Try:
-
-## Keyboard Shortcuts
-
-```
-Ctrl + S        (Save As)
-Ctrl + O        (Open)
-Ctrl + P        (Print)
-Windows + R     (Run)
-Windows + E     (File Explorer)
-Ctrl + Shift + Esc (Task Manager)
-Alt + F4
+```text
+Ctrl + S
+Ctrl + O
+Ctrl + P
+Windows + R
+Windows + E
+Ctrl + Shift + Esc
 Alt + Tab
 ```
 
-## Accessibility Abuse
+Accessibility paths can also help:
 
-```
+```text
 Shift x5
 Hold Shift 8 seconds
 Windows + U
+F1
 ```
 
-## F1 Help
+The objective is not escape yet. It is getting any file dialog, help viewer, or task surface.
 
-Press F1 — sometimes opens browser or help viewer → navigate to filesystem.
+## Step 2: Escape Through File Dialogs
 
-# 2. Step 2 – Escape via File Dialog
+If you reach an Open, Save, Print, or Upload dialog, try launching:
 
-Once you have:
-
-- Save As
-- Open
-- Print
-- Upload dialog
-
-You now try to reach cmd.exe.
-
-In the address bar type:
-
-```
+```text
 C:\Windows\System32\cmd.exe
-```
-
-Or:
-
-```
 powershell.exe
-```
-
-Or:
-
-```
 explorer.exe
-```
-
-Or use environment variables:
-
-```
 %SystemRoot%\System32\cmd.exe
-%WINDIR%\System32\cmd.exe
 %COMSPEC%
 ```
 
----
+Search bars inside dialogs are often enough.
 
-# 3. Search Bar Abuse (Very Common)
+## Step 3: Use Allowed Applications
 
-In Save/Open dialog:
+If Notepad, Word, or a similar editor is reachable:
 
-Type:
+1. create a small batch file
+2. save it as `All Files`
+3. execute it
 
-```
-cmd
-```
+Control Panel, Task Manager, and Settings surfaces can also provide alternate launch paths.
 
-Or:
+## Step 4: Use Environment And UNC Paths
 
-```
-powershell
-```
+If direct paths are filtered, try:
 
-Or:
-
-```
-*.bat
-```
-
-If you can search → double click executable.
-
----
-
-# 4. Notepad / Word Trick
-
-If you can open Notepad or Word:
-
-1. Type:
-
-```
-start cmd
-```
-
-2. Save as:
-
-```
-shell.bat
-```
-
-3. Change "Save as type" to:
-```
-All Files
-```
-
-4. Double click file.
-
-# 5. Control Panel Escape
-
-If Control Panel accessible:
-
-Open it → search bar (top right):
-
-```
-cmd
-```
-
-Or navigate to:
-
-```
-System
-Administrative Tools
-Task Scheduler
-```
-
-Create task → run cmd.exe
-
-# 6. Task Manager Escape
-
-If Task Manager allowed:
-
-File → Run new task
-
-Enter:
-
-```
-cmd
-powershell
-explorer
-```
-
-Tick:
-```
-Create this task with administrative privileges
-```
-
----
-
-# 7. Enumerating Users (Often Missed)
-
-If you get command execution:
-
-```
-whoami
-net user
-net localgroup administrators
-```
-
-GUI method:
-
-```
-lusrmgr.msc
-```
-
-If accessible → view users/groups.
-
-# 8. UNC Path Abuse
-
-Try accessing local drive via UNC:
-
-```
-\\127.0.0.1\C$
-\\localhost\C$
-```
-
-Or in file dialog:
-
-```
-\\tsclient\
-```
-
-# 9. Environment Variable Abuse
-
-Some filters block C:\ but not variables.
-
-Try in address bar:
-
-```
+```text
 %WINDIR%
 %SYSTEMROOT%
 %TEMP%
 %APPDATA%
 %USERPROFILE%
-%HOMEDRIVE%
-%TMP%
-```
-
-Common powerful ones:
-
-```
-%COMSPEC%
-%SYSTEMDRIVE%
-%LOCALAPPDATA%
-```
-
-# 10. Browser-Based Escape
-
-If only browser allowed:
-
-Try in address bar:
-
-```
-file:///C:/Windows/System32/cmd.exe
-file://C:/Windows/System32/cmd.exe
-C:/Windows
-C:\Windows
-```
-
-Variations:
-
-```
-File:/C:/Windows
-File://C:/Windows
-File:///C:/Windows
-```
-
-Try:
-
-```
+\\tsclient\
 \\127.0.0.1\C$
 ```
 
-# 11. Allowed Binaries (Living off the Land)
+Citrix and RDS environments especially reward testing `\\tsclient\`.
 
-If AppLocker in place, check if these allowed:
+## Step 5: Living-Off-The-Land Options
 
-```
-mshta.exe
-rundll32.exe
-regsvr32.exe
-wmic.exe
-powershell.exe
-certutil.exe
-cscript.exe
-wscript.exe
-ftp.exe
-schtasks.exe
-```
+If common shells are blocked, check whether trusted Windows binaries are still allowed:
+
+- `wmic.exe`
+- `powershell.exe`
+- `mshta.exe`
+- `rundll32.exe`
+- `regsvr32.exe`
+- `certutil.exe`
+- `schtasks.exe`
 
 Example:
 
-```
+```text
 wmic process call create cmd.exe
 ```
 
----
+## Methodology
 
-# 12. Citrix / RDS Specific
+* Display global variables and their permissions: `export -p`
+* Switch to another user using `sudo`/`su`
+* Basic privilege escalations such as CVE, sudo misconfiguration, etc. Comprehensive list at [Linux](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/linux-privilege-escalation/) / [Windows](https://swisskyrepo.github.io/InternalAllTheThings/redteam/escalation/windows-privilege-escalation/)
+* List default commands in the restricted shell: `compgen -c`
+* Container escape if it's running inside a `Docker`/`LXC` container
+* Pivot onto the network
+    * Scan other machines on the network or attempt SSRF exploitation
+    * Metadata for Cloud assets, see `cloud/aws` and `cloud/azure`
+* Use globbing capability built inside the shell: `echo *`, `echo .*`, `echo /*`
 
-Try:
+## Gaining a command shell
 
+* **Shortcut**
+    * [Window] + [R] -> cmd
+    * [CTRL] + [SHIFT] + [ESC] -> Task Manager
+    * [CTRL] + [ALT] + [DELETE] -> Task Manager
+* **Access through file browser**: Browsing to the folder containing the binary (i.e. `C:\windows\system32\`), we can simply right click and `open` it
+* **Drag-and-drop**: dragging and dropping any file onto the cmd.exe
+* **Hyperlink**: `file:///c:/Windows/System32/cmd.exe`
+* **Task Manager**: `File` > `New Task (Run...)` > `cmd`
+* **MSPAINT.exe**
+    * Open MSPaint.exe and set the canvas size to: `Width=6` and `Height=1` pixels
+    * Zoom in to make the following tasks easier
+    * Using the colour picker, set pixels values to (from left to right):
+
+        ```ps1
+        1st: R: 10,  G: 0,   B: 0
+        2nd: R: 13,  G: 10,  B: 13
+        3rd: R: 100, G: 109, B: 99
+        4th: R: 120, G: 101, B: 46
+        5th: R: 0,   G: 0,   B: 101
+        6th: R: 0,   G: 0,   B: 0
+        ```
+
+    * Save it as 24-bit Bitmap (*.bmp;*.dib)
+    * Change its extension from bmp to bat and run
+    * The generated file is also available for download: [escape-breakout-mspaint.bmp](./files/escape-breakout-mspaint.bmp)
+
+## Sticky Keys
+
+* Spawn the sticky keys dialog
+    * Via Shell URI : `shell:::{20D04FE0-3AEA-1069-A2D8-08002B30309D}`
+    * Hit 5 times [SHIFT]
+* Visit "Ease of Access Center"
+* You land on "Setup Sticky Keys", move up a level on "Ease of Access Center"
+* Start the OSK (On-Screen-Keyboard)
+* You can now use the keyboard shortcut (CTRL+N)
+
+## Dialog Boxes
+
+### Creating new files
+
+* Batch files – Right click > New > Text File > rename to .BAT (or .CMD) > edit > open
+* Shortcuts – Right click > New > Shortcut > `%WINDIR%\system32`
+
+## Open a new Windows Explorer instance
+
+* Right click any folder > select `Open in new window`
+
+## Exploring Context Menus
+
+* Right click any file/folder and explore context menus
+* Clicking `Properties`, especially on shortcuts, can yield further access via `Open File Location`
+
+### Save as
+
+* "Save as" / "Open as" option
+* "Print" feature – selecting "print to file" option (XPS/PDF/etc)
+* `\\127.0.0.1\c$\Windows\System32\` and execute `cmd.exe`
+
+### Input Boxes
+
+Many input boxes accept file paths; try all inputs with UNC paths such as `//attacker–pc/` or `//127.0.0.1/c$` or `C:\`
+
+### Bypass file restrictions
+
+Enter *.* or *.exe or similar in `File name` box
+
+## Internet Explorer
+
+### Download and Run/Open
+
+* Text files -> opened by Notepad
+
+### Menus
+
+* The address bar
+* Search menus
+* Help menus
+* Print menus
+* All other menus that provide dialog boxes
+
+### Accessing filesystem
+
+Enter these paths in the address bar:
+
+* file://C:/windows
+* C:/windows/
+* %HOMEDRIVE%
+* \\127.0.0.1\c$\Windows\System32
+
+### Unassociated Protocols
+
+It is possible to escape a browser based kiosk with other protocols than usual `http` or `https`.
+If you have access to the address bar, you can use any known protocol (`irc`, `ftp`, `telnet`, `mailto`, etc.)
+to trigger the *open with* prompt and select a program installed on the host.
+The program will than be launched with the uri as a parameter, you need to select a program that will not crash when recieving it.
+It is possible to send multiple parameters to the program by adding spaces in your uri.
+
+Note: This technique required that the protocol used is not already associated with a program.
+
+Example - Launching Firefox with a custom profile:
+
+This is a nice trick since Firefox launched with the custom profile may not be as much hardened as the default profile.
+
+0. Firefox need to be installed.
+1. Enter the following uri in the address bar: `irc://127.0.0.1 -P "Test"`
+2. Press enter to navigate to the uri.
+3. Select the firefox program.
+4. Firefox will be launched with the profile `Test`.
+
+In this example, it's the equivalent of running the following command:
+
+```ps1
+firefox irc://127.0.0.1 -P "Test"
 ```
-Ctrl + Alt + Break
-```
 
-Access local drives via:
+## Shell URI Handlers
 
-```
-\\tsclient\
-```
+A URI (Uniform Resource Identifier) handler is a software component that enables a web browser or operating system to pass a URI to an appropriate application for further handling.
 
-Check if local disk mapping enabled.
+For example, when you click on a "mailto:" link in a webpage, your device knows to open your default email application. This is because the "mailto:" URI scheme is registered to be handled by an email application. Similarly, "http:" and "https:" URIs are typically handled by a web browser.
 
-# 13. Assigned Access / Kiosk Mode
+In essence, URI handlers provide a bridge between web content and desktop applications, allowing for a seamless user experience when navigating between different types of resources.
 
-Try:
+The following URI handlers might trigger application on the machine:
 
-```
-Win + X
-Win + U
-Win + R
-```
-
-Try launching:
-
-```
-ms-settings:
-```
-
-From settings attempt Explorer launch.
-
-# 14. Batch File Discovery
-
-In file dialog search:
-
-```
-*.bat
-*.cmd
-```
-
-If writable directory available:
-
-Create:
-
-```
-shell.bat
-```
-
-Containing:
-
-```
-cmd
-```
-
-Execute.
-
----
-
-# 15. Panic Mode – Fast Attempts Block
-
-```
-C:\Windows\System32\cmd.exe
-powershell.exe
-explorer.exe
-
-%SystemRoot%\System32\cmd.exe
-%COMSPEC%
-%WINDIR%
-
-cmd
-powershell
-
-wmic process call create cmd.exe
-
-\\127.0.0.1\C$
-\\localhost\C$
-
-file:///C:/Windows/System32/cmd.exe
-```
+* shell:DocumentsLibrary
+* shell:Librariesshell:UserProfiles
+* shell:Personal
+* shell:SearchHomeFolder
+* shell:System shell:NetworkPlacesFolder
+* shell:SendTo
+* shell:Common Administrative Tools
+* shell:MyComputerFolder
+* shell:InternetFolder

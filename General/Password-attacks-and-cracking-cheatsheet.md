@@ -249,4 +249,3 @@ hashcat -m <mode> hashes.txt rockyou.txt -r /usr/share/hashcat/rules/best64.rule
 hashcat -m 1000 ntlm.txt ?u?l?l?l?l?d?d
 ```
 
-

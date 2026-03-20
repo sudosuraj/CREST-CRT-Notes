@@ -1,176 +1,174 @@
 # Broken Access Control
 
-## Quick Testing Flow
+## Why It Matters
 
-1. **Map features per role** (Anon / User / Admin / Other roles)
-2. **Get 2 accounts** (A and B) + note each user’s object IDs
-3. **Capture a “good” request** for A (view/edit/delete/export/download)
-4. Replay as:
-   - **No auth** (remove cookies/token)
-   - **Account B auth** (swap session)
-   - **Same auth, changed object** (change IDs/UUIDs)
-5. Try bypasses:
-   - URL/endpoint guessing, method changes, param tampering, role headers/claims
-6. Confirm impact:
-   - **Read** other user data
-   - **Modify** other user data
-   - **Perform admin-only actions**
-7. Capture evidence: request → response → impact
+Broken access control is one of the most common and most important web finding classes. The issue is not that a user is authenticated. The issue is that the server fails to enforce who should be allowed to do what.
 
+Typical impacts:
 
-## Core Types You Must Test
+- reading another user's data
+- modifying another user's data
+- accessing admin-only functions
+- crossing tenant boundaries
+- performing actions without authentication
 
-### A. Horizontal privilege escalation (IDOR/BOLA)
-User A accesses User B’s objects by changing identifiers.
+## Recognition Cues
+
+Look for:
+
+- object IDs in URLs, bodies, or API paths
+- admin endpoints hidden only by the UI
+- export, refund, download, billing, or user-management functions
+- multi-tenant identifiers such as `orgId`, `tenantId`, or `accountId`
+
+## Workflow
+
+1. map features by role
+2. obtain at least two test users if possible
+3. capture a legitimate request
+4. replay it as another user, unauthenticated, and with modified identifiers
+5. check for function-level and role-level bypasses
+
+## Core Test Types
+
+### Horizontal Access Control
+
+User A should not read or modify User B's data.
 
 Examples:
-- `/api/users/123` → `/api/users/124`
-- `/invoice?id=1001` → `1002`
-- `/files/uuid` → another UUID
 
-### B. Vertical privilege escalation
-Normal user accesses admin-only functions (admin pages/endpoints, dangerous actions). 
+```text
+/api/users/123
+/invoice?id=1001
+/files/<uuid>
+```
 
-### C. Function-level access control (BFLA)
-User can invoke restricted actions even if UI hides them (buttons removed ≠ auth). 
+### Vertical Access Control
 
-### D. Unauthenticated access
-Sensitive routes/actions exposed without login (missing checks).
+A normal user should not reach admin functions or restricted actions.
 
-### E. Parameter-based access control
-Authorization enforced by **client-controlled params** (role=admin, isAdmin=true). 
+Common targets:
+
+- `/admin`
+- `/manage`
+- `/settings`
+- `/config`
+- internal-only APIs
+
+### Function-Level Access Control
+
+If the UI hides a feature but the endpoint still works, the server-side control is weak.
+
+### Unauthenticated Access
+
+Remove cookies or authorization headers and re-test sensitive requests.
+
+## Practical Test Patterns
+
+### Session Swap
+
+1. capture a request as user A
+2. replay with user B's session
+3. keep the same object ID
+4. then modify the object ID again
+
+This distinguishes between:
+
+- ownership checks
+- role checks
+- complete lack of checks
+
+### Identifier Tampering
+
+Test:
+
+- sequential numeric IDs
+- known UUIDs
+- encoded or base64-style identifiers
+
+### Method And Endpoint Tampering
+
+Try:
+
+- `GET` vs `POST`
+- `DELETE` vs a hidden action endpoint
+- direct access to admin routes
+
+### Parameter Tampering
+
+Look for:
+
+```text
+role=admin
+isAdmin=true
+access=full
+tenantId=
+orgId=
+projectId=
+```
+
+### Header Abuse
+
+Some apps trust proxy-style headers incorrectly:
+
+```text
+X-Forwarded-For: 127.0.0.1
+X-Original-URL: /admin
+X-Rewrite-URL: /admin
+```
+
+These are fast checks, not guaranteed wins.
 
 ## High-Signal Targets
 
 ### Web
-- Admin panels, config pages, user management
-- “Export”, “Download”, “Generate report”, “Billing”, “Refund”, “Invite”
-- Hidden endpoints behind buttons/tabs
-- Direct object fetch endpoints: `/download`, `/view`, `/print`
 
-### API
+- admin pages
+- billing or refund features
+- report export
+- download endpoints
+- hidden tabs and workflows
+
+### APIs
+
 - `/api/v1/users/{id}`
 - `/api/orders/{id}`
-- `/api/projects/{id}/reports/{rid}`
-- bulk endpoints: `/search`, `/export`, `/list`
-- GraphQL: `node(id:)`, `viewer`, direct object queries
+- `/api/projects/{id}`
+- GraphQL object and node lookups
 
+## Where It Overlaps
 
-## Practical Test Patterns
+Access control failures often overlap with:
 
-### A. Swap sessions (Account A → Account B)
-- Login as A, capture request
-- Replace Cookie/Authorization with B’s token
-- Same object ID: should **deny**
-- Then change object ID to B’s: should **allow** for B only
+- IDOR
+- business logic flaws
+- CSRF on privileged actions
+- multi-tenant isolation failures
 
-### B. Remove auth (Unauthenticated check)
-- Remove `Cookie:` header
-- Remove `Authorization:` header
-- Remove CSRF token (if present) and see if still works
+## Pitfalls
 
-### C. Object ID fuzz (numbers + UUIDs + base64)
-Test common formats:
+- relying on UI role changes instead of replaying raw requests
+- treating authentication as authorization
+- stopping after a read-only access violation and missing write impact
+- missing tenant boundary issues because IDs looked non-sequential
 
-**Numeric**
-- `id=1` → `2`, `3`, `0`, `-1`, `99999`
-
-**UUID**
-- Replace with another known UUID (from B)
-- Try uppercase/lowercase changes (sometimes naïve checks)
-
-**Encoded**
-- Base64 decode/encode if values look like it
-- URL decode if values contain `%2f`, `%3d`
-
-## Bypass Techniques (the stuff that actually wins exams)
-
-### A. Forced browsing / endpoint guessing
-Try direct access to “admin” routes:
-- `/admin`
-- `/admin/users`
-- `/manage`
-- `/settings`
-- `/config`
-- `/internal`
-- `/debug`
-
-Use a wordlist if needed:
-- Common admin paths + your app’s nouns (users, invoices, reports)
-
-### B. HTTP method tampering
-If UI uses POST, try GET/PUT/PATCH/DELETE and vice versa.
-
-Examples:
-- `POST /api/users/123/delete` → `DELETE /api/users/123`
-- `GET /download?id=100` → `POST /download` with body id=100
-
-### C. Parameter tampering
-Look for any “authz-like” params and flip them:
-
-```
-role=admin
-isAdmin=true
-admin=1
-access=full
-privileged=true
-userType=staff
-accountId=...
-tenantId=...
-orgId=...
-projectId=...
-```
-
-Also try removing these params entirely (sometimes “missing” = default allow).
-
-### D. Header-based access control bypass
-Some apps trust headers (badly). Try adding:
-
-```
-X-Forwarded-For: 127.0.0.1
-X-Original-URL: /admin
-X-Rewrite-URL: /admin
-X-Forwarded-Host: localhost
-X-Host: localhost
-```
-
-(Only matters if the app is known to use them; still quick to test.)
-
-### E. Multi-step / workflow bypass
-If action is meant to require step 1 → step 2:
-- Directly call step 2 endpoint with crafted params
-- Replay “confirm” endpoints without completing prior steps
-
-### F. Client-side “disabled” features
-If a feature is disabled in UI (hidden button / greyed out):
-- Find the endpoint in history and call it anyway
-
-### G. Tenant boundary checks (multi-tenant)
-Classic failure: `tenantId` not enforced server-side.
-- Keep same session, change `tenantId/orgId/accountId`
-
-## 6. Burp Workflow
-
-1. Proxy → browse as Account A
-2. **Logger/HTTP history**: mark key requests (view/edit/export/delete)
-3. Send to Repeater:
-   - Variant 1: no auth
-   - Variant 2: Account B auth
-   - Variant 3: change object IDs
-4. Compare:
-   - status codes (200 vs 403/401)
-   - response length
-   - sensitive fields present (email, address, tokens, card metadata)
-5. If API: use Burp’s “Copy as cURL” for reproducible evidence
-
-PortSwigger’s access control guidance aligns with replaying requests and systematically varying roles/IDs.
-
-## 7. Evidence Checklist
+## Reporting Notes
 
 Capture:
-- The “legit” request as A (works)
-- The unauthorized request:
-  - as B, or unauthenticated, or with modified object ID
-- The response showing:
-  - data disclosure OR successful modification OR restricted action performed
-- Clear impact statement (what attacker gains)
+
+- the intended role or ownership boundary
+- the legitimate request
+- the unauthorized variant
+- whether the impact was read, write, delete, or admin action
+- whether the issue affected one object, many objects, or tenant-wide access
+
+## Fast Checklist
+
+```text
+1. Map features by role
+2. Capture a valid request
+3. Replay as another user and without auth
+4. Tamper with IDs, methods, and admin paths
+5. Prove read, write, or admin impact
+6. Save both the allowed and unauthorized request pair
+```

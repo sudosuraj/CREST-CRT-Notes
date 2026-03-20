@@ -1,401 +1,343 @@
-# Network Enumeration
+# Complete Network Reconnaissance & Analysis Guide - EVERY Topic Covered
 
-## Host Discovery
+## 1. Network Connections - Ethernet (Copper/Fiber)
 
-### Fping
+**DHCP auto-configuration (requests IP from DHCP server on copper Ethernet):**
+```bash
+sudo dhclient eth0  # Broadcasts DHCP DISCOVER on eth0 interface
 ```
-fping -a -g -q 10.10.10.0/24 | tee ips.txt
-```
 
-### Nmap Ping Scan
+**Static IP configuration (manually sets IP/mask/gateway on copper Ethernet):**
+```bash
+sudo ip addr add 192.168.1.100/24 dev eth0     # Assigns IP address and subnet mask
+sudo ip link set eth0 up                       # Activates the Ethernet interface
+sudo ip route add default via 192.168.1.1      # Sets default gateway (router IP)
 ```
-nmap -sn 192.168.1.0/24
-```
 
-### Nmap ARP Ping (local networks)
-```
-nmap -PR 192.168.1.0/24
+**Fiber Ethernet (same as copper, SFP module):**
+```bash
+sudo ethtool -S eth0  # Shows fiber link statistics (same commands)
 ```
 
-### ARP-Scan (local, reliable)
-```
-sudo arp-scan -I eth0 10.10.10.0/24
-```
+## 2. Network Connections - WiFi (802.11 a/b/g/n/ac/ax)
 
-### NetDiscover(passive)
-```
-sudo netdiscover -r 10.10.10.0/24
+**WiFi network scanning (discovers available access points):**
+```bash
+sudo iwlist wlan0 scan | grep ESSID  # Scans all 802.11 channels, lists SSIDs
 ```
 
-### Massscan (fast, local ranges)
+**WiFi WPA2 connection (authenticates to enterprise WPA2 AP):**
+```bash
+sudo wpa_supplicant -B -i wlan0 -c <(wpa_passphrase "SSID" "password")  # Creates temp config, connects in background
+sudo dhclient wlan0  # Requests IP via DHCP after association
 ```
-masscan 10.0.0.0/24
-```
 
-### Simple Bash-One Liner utilising ping
+**WiFi WPA3 SAE (modern secure WiFi):**
+```bash
+wpa_supplicant -c <(wpa_passphrase "SSID" "password" --sae) -i wlan0 -B  # WPA3 SAE authentication
 ```
-for i in {1..254}; do ping -c 1 -W 1 192.168.1.$i &>/dev/null && echo "Host 192.168.1.$i is up"; done
-```
-
 
+## 3. Ethernet VLANs & VLAN Tagging (IEEE 802.1Q)
 
-## TCP Port Scanning
-
-### Nmap scan for Common TCP ports
- 
+**Load VLAN module (enables 802.1Q tagging support):**
+```bash
+sudo modprobe 8021q  # Kernel module for VLAN subinterfaces
 ```
-sudo nmap -sS -Pn -n -T4 -iL ips.txt -oA nmap-sS-common
-```
 
-### nmap scan for all / FULL TCP scan
-```
-sudo nmap -sS -Pn -n -T4 -p- -iL ips.txt -oA nmap-sS-allPorts
+**Create VLAN interface (tags Ethernet frames with VLAN ID):**
+```bash
+sudo ip link add link eth0 name eth0.100 type vlan id 100  # Creates eth0.100 tagged VLAN 100
+sudo ip addr add 192.168.100.10/24 dev eth0.100            # Assigns IP to VLAN interface
+sudo ip link set eth0.100 up                               # Brings VLAN interface online
 ```
 
-### Verify Open TCP Ports (3-way handshake)
+**Windows VLAN tagging (PowerShell):**
+```powershell
+New-Vlan -InterfaceAlias "Ethernet" -VlanID 100  # Creates VLAN 100 tagged interface
+New-NetIPAddress -InterfaceAlias "Ethernet 100" -IPAddress 192.168.100.10 -PrefixLength 24  # Static IP
 ```
-sudo nmap -sT -Pn -n -p <PORTS> -T4 -iL ips.txt -oA nmap-sT-verifyopen
-```
 
-### Detailed / Aggressive Scan (services, scripts, OS) 
+**VLAN tagged traffic analysis (captures 802.1Q headers):**
+```bash
+sudo tcpdump -i eth0 -e -nn vlan  # Shows VLAN tags (0x8100 EtherType)
+# eth0: 00:11:22:33:44:55 > 66:77:88:99:aa:bb, ethertype 802.1Q (0x8100), length 102: vlan 100
 ```
-nmap -Pn -A -p <LIST> -iL ips.txt -oA detailednmap
-```
 
-### Service Detection and Script
-```
-nmap -sV -sC -Pn -T4 -p 10.10.10.10 -oA nmap-sV-sC-detailed
+**VLAN hopping security test (double tagging):**
+```bash
+# Scapy VLAN hop (sends double-tagged frame)
+scapy -c "sendp(Ether()/Dot1Q(vlan=100)/Dot1Q(vlan=200)/IP(dst='192.168.200.1')/ICMP())"
 ```
- 
-## UDP Port Scanning
 
-### Common UDP ports
-```
-nmap -sU -Pn -n -iL ips.txt -oA nmap-sU-common
-```
+## 4. IPv4 Protocol - Interface Configuration
 
-### UDP Scripts & Version Detection (confirmed ports)
-```
-nmap -sU -sC -sV -Pn -n -T2 -iL ips.txt -p <list> -oA nmap-sU-Scripts-openPorts
+**Static IP (IPv4 layer 3 addressing):**
+```bash
+sudo ip addr flush dev eth0        # Removes all IPs from interface
+sudo ip addr add 10.0.0.100/24 dev eth0  # Layer 3 IPv4 assignment
 ```
 
-### Masscan
+**DHCP client (IPv4 dynamic addressing):**
+```bash
+sudo dhclient -r eth0  # Releases current DHCP lease
+sudo dhclient eth0     # Requests new IPv4 lease via DHCP
 ```
-masscan 10.0.0.0/24 --udp masscan -p1-65535,U:1-65535 10.10.10.10 --rate=1000 -e tun0
-```
-
-
-## OS Fingerprinting
 
-### nmap OS Detection
+## 5. IPv4 Host Discovery - ARP/ICMP
 
+**ARP discovery (Layer 2 broadcast discovery):**
+```bash
+sudo arp-scan --localnet  # Sends ARP requests to all IPs on local subnet
+sudo arping -c 3 -I eth0 192.168.1.0/24  # ARP pings entire subnet
 ```
-nmap -O 10.10.10.1
-```
 
-### TTL Inspection
+**ICMP ping sweep (Layer 3 discovery):**
+```bash
+for i in {1..254}; do ping -c1 -W1 192.168.1.$i &>/dev/null && echo "192.168.1.$i"; done
 ```
-ping 10.10.10.1
-```
-* Windows = 128
-* Linux = 64
-* Cisco = 255
 
-### p0f (passive OS Fingerprinting)
-```
-p0f -i <network_interface>
+**Nmap comprehensive discovery (ARP+ICMP+TCP):**
+```bash
+nmap -sn 192.168.1.0/24  # -sn = no port scan, just host discovery
 ```
 
-## Internet Information Gathering and Reconnaissance
+## 6. IPv4 Routing Configuration
 
-### Nslookup
-
-#### Resolve a given hostname to the corresponding IP
+**Static route addition (IPv4 Layer 3 forwarding):**
+```bash
+sudo ip route add 172.16.0.0/16 via 192.168.1.254  # Routes specific subnet via gateway
+sudo ip route replace 172.16.0.0/16 via 192.168.1.253  # Replaces existing route
 ```
-nslookup target.com
-```
 
-#### Reverse DNS lookup
-```
-nslookup -type=PTR IP_address
+**View routing table (shows IPv4 forwarding paths):**
+```bash
+ip route show table all  # All routing tables (main, local, etc.)
 ```
 
-#### MX (Mail Exchange) lookup
+**Policy-based routing (source-based IPv4 routing):**
+```bash
+sudo ip rule add from 192.168.1.100 table 100  # Traffic from this IP uses table 100
+sudo ip route add default via 192.168.1.254 table 100  # Table 100 default gateway
 ```
-nslookup -type=MX domain.com
-```
 
-### DNSRecon
+## 7. Standard Pentesting - Network Mapping/Port Scanning
 
-#### Performing General Enumeration against target
-```
-dnsrecon -d domain.com -D /usr/share/wordlists/dnsmap.txt -t std --xml ouput.xml 
-```
-#### DNS reverse of all of the addresses
+**Network mapping (full service discovery):**
+```bash
+nmap -sS -sV -sC -O 192.168.1.0/24 -oA fullmap  # SYN scan + version + scripts + OS
 ```
-dnsrecon -r  127.0.0.0/24 -n  <IP_DNS> 
-dnsrecon -r  127.0.1.0/24 -n  <IP_DNS>
-dnsrecon -r  <IP_DNS>/24 -n  <IP_DNS>
-```
 
-### Dig
+**Port scanning (service enumeration):**
+```bash
+nmap -p- -T4 192.168.1.100  # All 65535 TCP ports, aggressive timing
+sudo nmap -sU --top-ports 100 192.168.1.100  # Top 100 UDP ports
 ```
-dig ANY @<DNS_IP> <DOMAIN>     #Any information
-
-dig A @<DNS_IP> <DOMAIN>       #Regular DNS request
-
-dig AAAA @<DNS_IP> <DOMAIN>    #IPv6 DNS request
-
-dig TXT @<DNS_IP> <DOMAIN>     #Information
-
-dig MX @<DNS_IP> <DOMAIN>      #Emails related
-
-dig NS @<DNS_IP> <DOMAIN>      #DNS that resolves that name
 
-dig -x 192.168.0.2 @<DNS_IP>   #Reverse lookup
-
-dig -x 2a00:1450:400c:c06::93 @<DNS_IP> #reverse IPv6 lookup
+**Service exploitation (Nmap scripts):**
+```bash
+nmap -p 21,22,23,25,53,80,110,111,135,139,143,443,993,995,1723,3306,3389,5900,8080 \
+--script vuln 192.168.1.0/24  # Vulnerability scanning
 ```
 
-### Zone Transfer
+## 8. IPv4 Protocols Awareness - ICMP/IGMP/TCP/UDP/IPsec
 
-#### Dig
+**ICMP types (network diagnostics):**
+```bash
+hping3 --icmp --icmp-ts 192.168.1.1  # ICMP timestamp
+hping3 --icmp --icmp-addr 192.168.1.1  # ICMP address mask
 ```
-dig axfr @<DNS_IP> <DOMAIN> 
-```
 
-#### DNSRecon
-```
-dnsrecon -d active.htb -a  -n  <IP_DNS> 
+**TCP 3-way handshake:**
+```bash
+hping3 --syn -p 80 -c 1 192.168.1.100  # TCP SYN packet
 ```
 
-## Network Connection
-### Telnet
+**UDP amplification:**
+```bash
+hping3 --udp -p 53 --data 1000 --flood 192.168.1.100  # UDP flood
 ```
-telnet 10.10.10.10 21
-```
 
-## VLAN Tagging
+**IPsec detection (covered previously):**
+```bash
+ike-scan 192.168.1.100  # IKEv1/v2 detection
+```
 
-### Connecting to VLAN
+## 9. Network Mapping Tools
 
-#### Windows
-```
-New-NetVLAN -InterfaceAlias "Ethernet" -VLANID 10
+**Traceroute variants (path discovery):**
+```bash
+traceroute 8.8.8.8                    # UDP traceroute (default)
+traceroute -I 8.8.8.8                  # ICMP traceroute
+traceroute -T -p 443 8.8.8.8           # TCP traceroute HTTPS
+mtr --report 8.8.8.8                   # Traceroute + packet loss
 ```
 
-#### Linux
+**Active service queries:**
+```bash
+# DNS reverse mapping
+for i in {1..254}; do host 192.168.1.$i 2>/dev/null; done
 
-1. Identify your physical interface
+# SNMP network inventory
+snmpwalk -v2c -c public 192.168.1.1 1.3.6.1.2.1.4.22.1.12  # ARP table (internal hosts)
 ```
-ip -4 a
-```
-* Look for the interface that has your IP (e.g. `eth0`, `ens18`).
 
-2. Create VLAN Interface (tagging step)
+**Logical diagram generation:**
+```bash
+nmap -oX map.xml 192.168.1.0/24 -T4 -A
+xsltproc map.xml -o map.dot  # Converts Nmap XML to Graphviz
+dot -Tpng map.dot -o network.png  # Renders network diagram
 ```
-sudo ip link add link ens18 name ens18.10 type vlan id 10
-```
-* `ens18` = physical interface (parent)
-* `ens18.10` = new VLAN interface name (convention: `<iface>.<vlanid>`)
-* `id 10` = VLAN ID
 
-3. Assign an IP address to the VLAN interface
-```
-sudo ip addr add 192.168.10.88/24 dev ens18.10
-```
-* Setting 192.168.10.88 as the IP of the VLAN interface.
+## 10. Host Criteria Identification
 
-4. If VLAN uses DHCP instead
-```
-sudo dhclient ens18.10
+**Find all FTP servers:**
+```bash
+nmap -p 21 --open 192.168.1.0/24 -oG - | grep "21/open" | awk '{print $2}'
 ```
 
-5. Bring the VLAN interface up
-```
-sudo ip link set ens18.10 up
-```
-6. Verify it exists and has an IP
+**Find Cisco routers:**
+```bash
+nmap --script cisco-* 192.168.1.0/24 | grep "Cisco"
+sudo nmap -sV --version-intensity 9 192.168.1.0/24 | grep -i cisco
 ```
-ip -4 a
+
+**Windows hosts only:**
+```bash
+nmap -O 192.168.1.0/24 | grep "Windows" | awk '{print $NF}'
 ```
 
-7. Test connectivity
+## 11. Network Devices Analysis
 
-* Ping another host on that VLAN
+**Router configuration (SNMP Cisco config):**
+```bash
+snmpwalk -v2c -c public 192.168.1.1 1.3.6.1.4.1.9.9.96.1.1.1.1.2.49  # Running config
 ```
-ping 192.168.10.93
-```
 
-* If you have multiple interfaces/routes, force the VLAN interface
-```
-ping -I ens18.10 192.167.10.93
+**Switch CDP/LLDP discovery:**
+```bash
+sudo nmap --script cdp-neighbors-discover,lldp2csv 192.168.1.0/24  # Switch neighbors
 ```
 
-* `-I` forces the ping to go out via the VLAN interface, so you know you're testing VLAN 10.
-
-
+**Firewall detection (response analysis):**
+```bash
+nmap -p 22,80,443 --reason 192.168.1.1  # filtered=no response vs rejected=RST
+sudo nmap --packet-trace -p 80 192.168.1.1  # Shows firewall drops
+```
 
-### Identify VLAN Traffic
+## 12. Network Filtering & Bypass Methods
 
-1. Identify interfaces that may carry VLANs (e.g `eth0.10`, `ens18.20`)
+**Fragmentation bypass (splits packets past simple filters):**
+```bash
+nmap -f -p 80 192.168.1.1  # 8-byte TCP fragments
+sudo hping3 -c 3 -d 24 -S -w 64 -p 80 --fragment 192.168.1.1  # Custom fragments
 ```
-ip link show
-```
 
-2. List VLAN interfaces only (e.g. `vlan protocol 802.1Q id <VID>`)
+**Source port bypass (trusted service ports):**
+```bash
+nmap --source-port 53 -p 80 192.168.1.1     # DNS source port
+nmap --source-port 20 -p 80 192.168.1.1     # FTP data port
 ```
-ip -d link show
-```
-
-3. Catpure VLAN-tagged traffic
 
+**Idle/Zombie scan (third-party host scans target):**
+```bash
+sudo nmap -sI 192.168.1.254 192.168.1.1     # Zombie host IP predicts sequence numbers
 ```
-tcpdump -i eth1 -e vlan
-```
-**Example Output:** `vlan 10, ethertype IPv4, 192.168.10.88 > 192.168.10.93`
 
-4. Capture traffic for a specific VLAN ID
+**Decoy scanning (hides real source):**
+```bash
+nmap -D RND:10 -p 80 192.168.1.1            # 10 random decoy IPs
 ```
-sudo tcpdump -i ens18 -e vlan 10
-```
 
-#### Wireshark
+## 13. Traffic Analysis - Capture
 
-* Display filter for VLAN traffic
-```
-vlan
+**Live capture to PCAP (standard Wireshark format):**
+```bash
+sudo tcpdump -i eth0 -w traffic.pcap host 192.168.1.100 and port 80  # HTTP only
 ```
 
-* Filter for specific VLAN ID
+**Filtered real-time capture:**
+```bash
+sudo tshark -i eth0 -f "tcp port 443" -w https.pcap  # TLS traffic
+sudo tshark -i eth0 -2 -r capture.pcap -Y "http"      # HTTP from PCAP
 ```
-vlan.id == 10
-```
-
-
-## Configuring Static IP & DHCP
 
-### Linux
+## 14. Traffic Analysis - Credential Recovery
 
-1. Identify Interface
+**HTTP POST credentials:**
+```bash
+tshark -r traffic.pcap -Y "http.request.method == POST and frame.len > 200" \
+-T fields -e http.request.uri -e http.file_data -e frame.number
 ```
-ip -4 a
-```
 
-2. Static IP
-
-#### set IP 172.16.1.10 on the local network for ens18
-```
-sudo ip addr add 172.16.1.10/24 dev ens18 
+**NTLM authentication hashes:**
+```bash
+tshark -r traffic.pcap -Y "ntlm" -T fields -e ntlmssp.ntlm_auth -e ntlmssp.ntlm_hash
+# Crack: hashcat -m 5600 hashes.txt rockyou.txt
 ```
-#### Bring interface up
-```
-sudo ip link set ens18 up
-```
-
-#### Configure the default gateway
 
+**FTP plaintext passwords:**
+```bash
+tshark -r traffic.pcap -Y "ftp.request.command == PASS" -T fields -e ftp.request.arg -e frame.number
 ```
-sudo ip route add default via 172.16.1.1
-```
-**What the above does**
-* Sets the default route
-* Tells the OS: "For traffic not destined for my local subnet, send it to 172.16.1.1
 
-#### Configure DNS
+**HTTP Basic Auth:**
+```bash
+tshark -r traffic.pcap -Y "http.authbasic" -T fields -e http.authbasic -e http.host
 ```
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-```
-
-3. DHCP 
 
-* Following command says: "Is there a DHCP Server? Please give me an IP configuration."
+**SMB credentials:**
+```bash
+tshark -r traffic.pcap -Y "smb.cmd == 0x72" -T fields -e smb.file -e smb2.auth_frame
 ```
-sudo dhclient ens18
-```
-* To release first (Following commands say "I'm done with this IP. You can give it back to the pool.")
-```
-sudo dhclient -r ens18
-sudo dhclient ens18
-```
 
-#### NetworkManager (alternative way)
-
-##### Static IP
-```
-nmcli con show
-nmcli con modify "<connection-name>" \
-  ipv4.method manual \
-  ipv4.addresses 172.16.1.10/24 \
-  ipv4.gateway 172.16.1.1 \
-  ipv4.dns 8.8.8.8
-nmcli con up "<connection-name>"
-```
+## 15. Traffic Analysis - Vulnerability Detection
 
-##### DHCP
+**SQL injection signatures:**
+```bash
+tshark -r traffic.pcap -Y "http contains 'union select' or http contains '1=1--' or http contains \"' or '\"'" \
+-T fields -e http.request.uri -e frame.number
 ```
-nmcli con modify "<connection-name>" ipv4.method auto
-nmcli con up "<connection-name>"
-```
 
-#### Restart Network Settings
+**Directory traversal:**
+```bash
+tshark -r traffic.pcap -Y "http contains '../' or http contains '%2e%2e%2f' or http contains '%5c%2e%2e'" \
+-T fields -e http.request.uri
 ```
-sudo systemctl restart NetworkManager.service 
-sudo systemctl restart networking.service
-```
-
-### Windows
 
-#### netsh
+**XSS payloads:**
+```bash
+tshark -r traffic.pcap -Y "http contains '<script>' or http contains 'javascript:'" -T fields -e http.request.uri
 ```
-netsh interface ip set address name="Ethernet" static <IP_Address> <Subnet_Mask>
 
-netsh interface ip set address name="Ethernet" source=dhcp
+**SMB EternalBlue:**
+```bash
+tshark -r traffic.pcap -Y "smb.cmd == 0x72 and smb.trans2.cmd == 0x0e" -T fields -e frame.number -e smb.file
 ```
 
+## 16. Complete Automated Recon
 
-## IP Routing
-
-### "To reach 192.168.2.0/24, send packets to 192.168.1.1, using eth0"
-```
-sudo ip route add 192.168.2.0/24 via 192.168.1.1 dev eth0
-sudo ip route add <destination_network> via <gateway_ip> dev <interface>
-```
+```bash
+#!/bin/bash
+# full_network_recon.sh
+NETWORK=$1 INTERFACE=$2
 
-### Connect to 172.16.1.1 via gateway 192.168.1.254
-```
-sudo ip route add 172.16.1.0/24 via 192.168.1.254
-# then try to curl to 172.16.1.1 to see if reachable
-```
-#### If already set up access to 172.16.1.1 above, then we can use that again to double pivot.
-#### For example, connect to 10.10.10.1 via 172.16.1.1
-```
-sudo ip route add 10.10.10.0/24 via 172.16.1.1
-```
+# 1. VLAN discovery (tagged traffic)
+sudo tcpdump -i $INTERFACE -c 100 -e vlan 2>/dev/null | grep "vlan " | sort -u
 
+# 2. Host discovery (ARP/ICMP)
+sudo nmap -sn $NETWORK -oG hosts.txt
 
-## Service Identification 
+# 3. Service mapping
+sudo nmap -sS -sV -sC -O $(grep "Up" hosts.txt | awk '{print $2}') -oA services
 
-### nmap
-```
-nmap -sV example.com
-```
+# 4. UDP services (DNS/NBT/LLMNR)
+sudo nmap -sU --top-ports 50 $(grep "Up" hosts.txt | awk '{print $2}')
 
-### netcat
-```
-nc example.com 80
-```
-### telnet
-```
-telnet example.com 80
-```
+# 5. Capture traffic (10min)
+sudo timeout 600 tcpdump -i $INTERFACE -w recon_$(date +%s).pcap &
 
-### curl
-```
-curl -I http://example.com
+# 6. Analyze capture
+wait
+tshark -r recon_*.pcap -Y "http or ntlm or ftp or smb" -T fields -e frame.number -e http.request.uri -e ntlmssp.ntlm_hash
 ```
 
-### wget
-```
-wget --server-response http://example.com
-```
