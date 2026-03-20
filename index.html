@@ -1915,6 +1915,9 @@
                     <button class="btn btn-icon header-tool" id="selectFolder" title="Select Folder (All Browsers)">
                         📂
                     </button>
+                    <button class="btn btn-icon header-tool" id="loadFromGithub" title="Load from GitHub">
+                        🌐
+                    </button>
                     <button class="btn btn-icon header-tool header-tool-danger" id="clearStorage" title="Clear Storage" style="display: none;">
                         🗑️
                     </button>
@@ -2641,7 +2644,8 @@
                     themeToggleLabel: document.getElementById('themeToggleLabel'),
                     expandAll: document.getElementById('expandAll'),
                     collapseAll: document.getElementById('collapseAll'),
-                    clearAll: document.getElementById('clearAll')
+                    clearAll: document.getElementById('clearAll'),
+                    loadFromGithub: document.getElementById('loadFromGithub')
                 };
 
                 this.currentActiveElement = null;
@@ -2874,12 +2878,97 @@
                     });
                 }
 
+                // Load from GitHub
+                if (this.elements.loadFromGithub) {
+                    this.elements.loadFromGithub.addEventListener('click', () => {
+                        this.promptAndLoadFromGitHub();
+                    });
+                }
+
                 // Window resize
                 window.addEventListener('resize', () => {
                     if (window.innerWidth > 768) {
                         this.elements.sidebar.classList.remove('collapsed');
                     }
                 });
+            }
+
+            async promptAndLoadFromGitHub() {
+                const repoPath = prompt("Enter GitHub repository (e.g., username/repo):", "username/repo");
+                if (!repoPath || repoPath === "username/repo") return;
+
+                const branch = prompt("Enter branch name:", "main") || "main";
+                await this.loadFromGitHub(repoPath, branch);
+            }
+
+            async loadFromGitHub(repoPath, branch) {
+                try {
+                    Toast.show(`Loading from ${repoPath}...`, 'info');
+
+                    // Fetch the tree using GitHub API (recursive)
+                    const treeUrl = `https://api.github.com/repos/${repoPath}/git/trees/${branch}?recursive=1`;
+                    const response = await fetch(treeUrl);
+
+                    if (!response.ok) {
+                        throw new Error(`GitHub API returned ${response.status}: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+
+                    // Filter for markdown files
+                    const markdownNodes = data.tree.filter(node =>
+                        node.type === 'blob' && (node.path.endsWith('.md') || node.path.endsWith('.markdown'))
+                    );
+
+                    if (markdownNodes.length === 0) {
+                        Toast.show('No markdown files found in the repository.', 'error');
+                        return;
+                    }
+
+                    Toast.show(`Found ${markdownNodes.length} files. Downloading...`, 'info');
+
+                    const files = [];
+                    // Fetch each file's content
+                    for (const node of markdownNodes) {
+                        const rawUrl = `https://raw.githubusercontent.com/${repoPath}/${branch}/${node.path}`;
+                        const contentResponse = await fetch(rawUrl);
+
+                        if (!contentResponse.ok) {
+                            console.warn(`Failed to fetch ${node.path}`);
+                            continue;
+                        }
+
+                        const content = await contentResponse.text();
+
+                        // Create a mock File object
+                        const file = new File([content], node.path.split('/').pop(), {
+                            type: 'text/markdown'
+                        });
+
+                        // Attach relative path so the directory structure is preserved
+                        Object.defineProperty(file, 'webkitRelativePath', {
+                            value: node.path,
+                            writable: false
+                        });
+                        Object.defineProperty(file, 'relativePath', {
+                            value: node.path,
+                            writable: false
+                        });
+
+                        files.push(file);
+                    }
+
+                    if (files.length > 0) {
+                        await this.handleFiles(files);
+                        Toast.show('GitHub repository loaded successfully!', 'success');
+                    } else {
+                        Toast.show('Failed to download any markdown files.', 'error');
+                    }
+
+                } catch (error) {
+                    console.error('Error loading from GitHub:', error);
+                    Toast.show(`Error: ${error.message}`, 'error');
+                }
             }
 
             async handleFileInput(fileList) {
@@ -2894,6 +2983,7 @@
 
                 await this.handleFiles(files);
             }
+
 
             attachRelativePath(file, relativePath) {
                 if (!relativePath || !file) return file;
